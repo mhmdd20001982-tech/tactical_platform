@@ -86,6 +86,7 @@ ProtocolMessage locationMessage({
   required String teamId,
   required double latitude,
   required double longitude,
+  required String deviceName,
   double? accuracy,
 }) =>
     ProtocolMessage(
@@ -97,6 +98,7 @@ ProtocolMessage locationMessage({
       payload: <String, dynamic>{
         'latitude': latitude,
         'longitude': longitude,
+        'device_name': deviceName,
         'recorded_at': DateTime.now().millisecondsSinceEpoch,
         if (accuracy != null) 'accuracy': accuracy,
       },

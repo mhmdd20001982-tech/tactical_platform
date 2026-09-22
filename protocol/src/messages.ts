@@ -135,6 +135,9 @@ function parsePayload(type: MessageType, payload: unknown): Record<string, unkno
         latitude,
         longitude,
         recorded_at: requiredFiniteNumber(payload.recorded_at, "recorded_at"),
+        ...(payload.device_name === undefined
+          ? {}
+          : { device_name: requiredString(payload.device_name, "device_name", 128) }),
         ...(payload.accuracy === undefined
           ? {}
           : { accuracy: requiredFiniteNumber(payload.accuracy, "accuracy") }),

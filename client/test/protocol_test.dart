@@ -24,6 +24,7 @@ void main() {
       teamId: 'team-1',
       latitude: 31.95,
       longitude: 35.91,
+      deviceName: 'Test device',
     );
     expect(location.type, 'LOCATION');
     expect(location.payload['latitude'], 31.95);
@@ -58,6 +59,7 @@ void main() {
           'longitude': 35.91,
           'recorded_at': 1730000000000,
           'accuracy': 4.5,
+          'device_name': 'Remote device',
         },
       }),
     );
@@ -65,6 +67,7 @@ void main() {
     expect(location.latitude, 31.95);
     expect(location.longitude, 35.91);
     expect(location.accuracy, 4.5);
+    expect(location.deviceName, 'Remote device');
   });
 
   test('rejects non-location messages as map locations', () {

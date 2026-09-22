@@ -95,6 +95,7 @@ class TacticalClient {
   void sendLocation({
     required double latitude,
     required double longitude,
+    required String deviceName,
     double? accuracy,
   }) {
     _ensureConnected();
@@ -103,6 +104,7 @@ class TacticalClient {
       teamId: teamId,
       latitude: latitude,
       longitude: longitude,
+      deviceName: deviceName,
       accuracy: accuracy,
     );
     _channel!.sink.add(jsonEncode(message.toJson()));

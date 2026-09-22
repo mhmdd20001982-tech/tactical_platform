@@ -3,6 +3,7 @@ import 'protocol.dart';
 class TeamLocation {
   const TeamLocation({
     required this.deviceId,
+    required this.deviceName,
     required this.latitude,
     required this.longitude,
     required this.recordedAt,
@@ -10,6 +11,7 @@ class TeamLocation {
   });
 
   final String deviceId;
+  final String deviceName;
   final double latitude;
   final double longitude;
   final DateTime recordedAt;
@@ -27,6 +29,7 @@ class TeamLocation {
     }
     return TeamLocation(
       deviceId: message.senderId,
+      deviceName: message.payload['device_name'] as String? ?? message.senderId,
       latitude: latitude.toDouble(),
       longitude: longitude.toDouble(),
       recordedAt: DateTime.fromMillisecondsSinceEpoch(recordedAt.toInt()),

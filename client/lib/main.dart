@@ -40,6 +40,7 @@ class _ClientHomePageState extends State<ClientHomePage> {
   final _mapController = MapController();
   final _locationService = LocationService();
   final Map<String, TeamLocation> _locations = {};
+  final Map<String, List<LatLng>> _trails = {};
   TacticalClient? _client;
   StreamSubscription<ProtocolMessage>? _messageSubscription;
   StreamSubscription<Position>? _locationSubscription;
@@ -103,7 +104,12 @@ class _ClientHomePageState extends State<ClientHomePage> {
     try {
       final location = TeamLocation.fromMessage(message);
       if (!mounted) return;
-      setState(() => _locations[location.deviceId] = location);
+      setState(() {
+        _locations[location.deviceId] = location;
+        final trail = _trails.putIfAbsent(location.deviceId, () => <LatLng>[]);
+        trail.add(LatLng(location.latitude, location.longitude));
+        if (trail.length > 100) trail.removeAt(0);
+      });
       if (location.deviceId == _deviceController.text.trim()) {
         _moveMap(location.latitude, location.longitude);
       }
@@ -136,16 +142,23 @@ class _ClientHomePageState extends State<ClientHomePage> {
         client.sendLocation(
           latitude: position.latitude,
           longitude: position.longitude,
+          deviceName: client.deviceName,
           accuracy: position.accuracy,
         );
         final location = TeamLocation(
           deviceId: client.deviceId,
+          deviceName: client.deviceName,
           latitude: position.latitude,
           longitude: position.longitude,
           recordedAt: position.timestamp,
           accuracy: position.accuracy,
         );
-        setState(() => _locations[location.deviceId] = location);
+        setState(() {
+          _locations[location.deviceId] = location;
+          final trail = _trails.putIfAbsent(location.deviceId, () => <LatLng>[]);
+          trail.add(LatLng(location.latitude, location.longitude));
+          if (trail.length > 100) trail.removeAt(0);
+        });
         _moveMap(location.latitude, location.longitude);
       },
       onError: (Object error) {
@@ -209,6 +222,20 @@ class _ClientHomePageState extends State<ClientHomePage> {
                     TextSourceAttribution('OpenStreetMap contributors'),
                   ],
                 ),
+                PolylineLayer(
+                  polylines: _trails.entries
+                      .where((entry) => entry.value.length > 1)
+                      .map(
+                        (entry) => Polyline(
+                          points: entry.value,
+                          strokeWidth: entry.key == _deviceController.text.trim() ? 5 : 3,
+                          color: entry.key == _deviceController.text.trim()
+                              ? Colors.indigo
+                              : Colors.orange,
+                        ),
+                      )
+                      .toList(),
+                ),
                 MarkerLayer(
                   markers: _locations.values
                       .map(
@@ -217,7 +244,8 @@ class _ClientHomePageState extends State<ClientHomePage> {
                           width: 48,
                           height: 48,
                           child: Tooltip(
-                            message: '${location.deviceId}\n${location.recordedAt}',
+                            message:
+                                '${location.deviceName}\n${location.deviceId}\n${location.recordedAt}',
                             child: const Icon(Icons.location_pin, color: Colors.red, size: 42),
                           ),
                         ),
@@ -247,9 +275,42 @@ class _ClientHomePageState extends State<ClientHomePage> {
                 ),
               ),
             ),
+            Positioned(
+              left: 12,
+              right: 12,
+              bottom: 12,
+              child: Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(10),
+                  child: _locations.isEmpty
+                      ? const Text('No team locations received')
+                      : Wrap(
+                          spacing: 12,
+                          runSpacing: 6,
+                          children: _locations.values
+                              .map(
+                                (location) => Chip(
+                                  avatar: const Icon(Icons.person_pin_circle, size: 18),
+                                  label: Text(
+                                    '${location.deviceName} · ${_formatAge(location.recordedAt)}',
+                                  ),
+                                ),
+                              )
+                              .toList(),
+                        ),
+                ),
+              ),
+            ),
           ],
         ),
       );
+
+  String _formatAge(DateTime timestamp) {
+    final seconds = DateTime.now().difference(timestamp).inSeconds;
+    if (seconds < 5) return 'online';
+    if (seconds < 60) return '${seconds}s ago';
+    return '${seconds ~/ 60}m ago';
+  }
 }
 
 class _SettingsSheet extends StatelessWidget {
