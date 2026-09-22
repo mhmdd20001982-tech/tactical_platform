@@ -1,0 +1,103 @@
+import 'dart:convert';
+
+const protocolVersion = 1;
+
+class ProtocolMessage {
+  const ProtocolMessage({
+    required this.type,
+    required this.id,
+    required this.senderId,
+    required this.timestamp,
+    required this.payload,
+    this.teamId,
+  });
+
+  final String type;
+  final String id;
+  final String senderId;
+  final int timestamp;
+  final String? teamId;
+  final Map<String, dynamic> payload;
+
+  Map<String, dynamic> toJson() => <String, dynamic>{
+        'v': protocolVersion,
+        'type': type,
+        'id': id,
+        'sender_id': senderId,
+        'ts': timestamp,
+        if (teamId != null) 'team_id': teamId,
+        'payload': payload,
+      };
+
+  factory ProtocolMessage.fromJson(Map<String, dynamic> json) {
+    if (json['v'] != protocolVersion) {
+      throw const FormatException('Unsupported protocol version');
+    }
+    final type = json['type'];
+    final id = json['id'];
+    final senderId = json['sender_id'];
+    final timestamp = json['ts'];
+    final payload = json['payload'];
+    if (type is! String ||
+        id is! String ||
+        senderId is! String ||
+        timestamp is! num ||
+        payload is! Map) {
+      throw const FormatException('Invalid protocol message');
+    }
+    return ProtocolMessage(
+      type: type,
+      id: id,
+      senderId: senderId,
+      timestamp: timestamp.toInt(),
+      teamId: json['team_id'] as String?,
+      payload: Map<String, dynamic>.from(payload),
+    );
+  }
+
+  String encode() => '${jsonEncode(toJson())}\n';
+}
+
+String newMessageId() =>
+    '${DateTime.now().microsecondsSinceEpoch}-${_messageCounter++}';
+int _messageCounter = 0;
+
+ProtocolMessage helloMessage({
+  required String deviceId,
+  required String name,
+  required String teamId,
+  String? token,
+}) =>
+    ProtocolMessage(
+      type: 'HELLO',
+      id: newMessageId(),
+      senderId: deviceId,
+      timestamp: DateTime.now().millisecondsSinceEpoch,
+      teamId: teamId,
+      payload: <String, dynamic>{
+        'device_id': deviceId,
+        'name': name,
+        if (token != null) 'token': token,
+      },
+    );
+
+ProtocolMessage locationMessage({
+  required String deviceId,
+  required String teamId,
+  required double latitude,
+  required double longitude,
+  double? accuracy,
+}) =>
+    ProtocolMessage(
+      type: 'LOCATION',
+      id: newMessageId(),
+      senderId: deviceId,
+      timestamp: DateTime.now().millisecondsSinceEpoch,
+      teamId: teamId,
+      payload: <String, dynamic>{
+        'latitude': latitude,
+        'longitude': longitude,
+        'recorded_at': DateTime.now().millisecondsSinceEpoch,
+        if (accuracy != null) 'accuracy': accuracy,
+      },
+    );
