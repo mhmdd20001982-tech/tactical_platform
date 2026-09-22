@@ -77,8 +77,15 @@ class TacticalClient {
       },
     );
     try {
+      // On Flutter Web, sending before the browser WebSocket reaches OPEN can
+      // leave the HELLO queued without a useful error. Wait for the channel
+      // handshake explicitly before writing the first protocol frame.
+      await channel.ready.timeout(timeout);
       channel.sink.add(jsonEncode(hello.toJson()));
       await acknowledged.future.timeout(timeout);
+    } on TimeoutException {
+      await disconnect();
+      throw StateError('WebSocket connection timed out: $serverUri');
     } catch (_) {
       await disconnect();
       rethrow;
