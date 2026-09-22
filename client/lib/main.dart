@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
+import 'package:flutter/foundation.dart';
 
 import 'location_models.dart';
 import 'location_service.dart';
@@ -31,7 +32,8 @@ class ClientHomePage extends StatefulWidget {
 }
 
 class _ClientHomePageState extends State<ClientHomePage> {
-  final _urlController = TextEditingController(text: 'ws://127.0.0.1:8080');
+  late final TextEditingController _urlController =
+      TextEditingController(text: _defaultWebSocketUrl());
   final _teamController = TextEditingController(text: 'demo-team');
   final _deviceController = TextEditingController(text: 'flutter-device-1');
   final _nameController = TextEditingController(text: 'Flutter Client');
@@ -44,6 +46,13 @@ class _ClientHomePageState extends State<ClientHomePage> {
   String _status = 'Disconnected';
   bool _sharing = false;
   LatLng _mapCenter = const LatLng(31.95, 35.91);
+
+  String _defaultWebSocketUrl() {
+    if (!kIsWeb) return 'ws://127.0.0.1:8080';
+    final base = Uri.base;
+    final scheme = base.scheme == 'https' ? 'wss' : 'ws';
+    return Uri(scheme: scheme, host: base.host, port: 8080).toString();
+  }
 
   @override
   void dispose() {
