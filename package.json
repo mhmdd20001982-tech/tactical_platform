@@ -1,0 +1,10 @@
+{
+  "name": "tactical-platform",
+  "private": true,
+  "scripts": {
+    "install:all": "npm install --prefix protocol && npm install --prefix server",
+    "build": "npm run build --prefix protocol && npm run build --prefix server",
+    "typecheck": "npm run typecheck --prefix protocol && npm run typecheck --prefix server",
+    "test": "npm run build --prefix protocol && npm run build --prefix server && npm run test --prefix protocol"
+  }
+}

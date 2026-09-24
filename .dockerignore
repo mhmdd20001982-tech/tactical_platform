@@ -1,0 +1,9 @@
+.git
+.github
+client
+**/node_modules
+**/dist
+**/.dart_tool
+**/build
+Dockerfile
+docker-compose.yml
