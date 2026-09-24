@@ -103,3 +103,64 @@ ProtocolMessage locationMessage({
         if (accuracy != null) 'accuracy': accuracy,
       },
     );
+
+ProtocolMessage chatMessage({
+  required String deviceId,
+  required String teamId,
+  required String text,
+}) =>
+    ProtocolMessage(
+      type: 'CHAT',
+      id: newMessageId(),
+      senderId: deviceId,
+      timestamp: DateTime.now().millisecondsSinceEpoch,
+      teamId: teamId,
+      payload: <String, dynamic>{'text': text},
+    );
+
+ProtocolMessage pointMessage({
+  required String deviceId,
+  required String teamId,
+  required String pointId,
+  required String name,
+  required double latitude,
+  required double longitude,
+  String? description,
+}) =>
+    ProtocolMessage(
+      type: 'POINT',
+      id: newMessageId(),
+      senderId: deviceId,
+      timestamp: DateTime.now().millisecondsSinceEpoch,
+      teamId: teamId,
+      payload: <String, dynamic>{
+        'point_id': pointId,
+        'name': name,
+        'latitude': latitude,
+        'longitude': longitude,
+        if (description != null && description.isNotEmpty)
+          'description': description,
+      },
+    );
+
+ProtocolMessage sosMessage({
+  required String deviceId,
+  required String teamId,
+  required String eventId,
+  required String status,
+  required double latitude,
+  required double longitude,
+}) =>
+    ProtocolMessage(
+      type: 'SOS',
+      id: newMessageId(),
+      senderId: deviceId,
+      timestamp: DateTime.now().millisecondsSinceEpoch,
+      teamId: teamId,
+      payload: <String, dynamic>{
+        'event_id': eventId,
+        'status': status,
+        'latitude': latitude,
+        'longitude': longitude,
+      },
+    );

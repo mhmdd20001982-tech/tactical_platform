@@ -19,7 +19,8 @@ class TacticalPlatformApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) => MaterialApp(
         title: 'Tactical Platform',
-        theme: ThemeData(colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo)),
+        theme: ThemeData(
+            colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo)),
         home: const ClientHomePage(),
       );
 }
@@ -41,6 +42,9 @@ class _ClientHomePageState extends State<ClientHomePage> {
   final _locationService = LocationService();
   final Map<String, TeamLocation> _locations = {};
   final Map<String, List<LatLng>> _trails = {};
+  final Map<String, Map<String, dynamic>> _points = {};
+  final Map<String, Map<String, dynamic>> _sosEvents = {};
+  final List<Map<String, dynamic>> _chatMessages = [];
   TacticalClient? _client;
   StreamSubscription<ProtocolMessage>? _messageSubscription;
   StreamSubscription<Position>? _locationSubscription;
@@ -100,6 +104,29 @@ class _ClientHomePageState extends State<ClientHomePage> {
   }
 
   void _receiveMessage(ProtocolMessage message) {
+    if (message.type == 'CHAT') {
+      final text = message.payload['text'] as String? ?? '';
+      setState(
+          () => _chatMessages.add({'sender': message.senderId, 'text': text}));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('${message.senderId}: $text')),
+        );
+      }
+      return;
+    }
+    if (message.type == 'POINT') {
+      final pointId = message.payload['point_id'] as String?;
+      if (pointId == null) return;
+      setState(() => _points[pointId] = message.payload);
+      return;
+    }
+    if (message.type == 'SOS') {
+      final eventId = message.payload['event_id'] as String?;
+      if (eventId == null) return;
+      setState(() => _sosEvents[eventId] = message.payload);
+      return;
+    }
     if (message.type != 'LOCATION') return;
     try {
       final location = TeamLocation.fromMessage(message);
@@ -117,6 +144,79 @@ class _ClientHomePageState extends State<ClientHomePage> {
       // The protocol client has already validated the envelope; ignore an
       // invalid domain payload rather than putting a bad marker on the map.
     }
+  }
+
+  Future<void> _sendChat() async {
+    final client = _client;
+    if (client == null || !client.isConnected) return;
+    final controller = TextEditingController();
+    final text = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Team chat'),
+        content: TextField(
+            controller: controller,
+            autofocus: true,
+            decoration: const InputDecoration(labelText: 'Message')),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel')),
+          FilledButton(
+              onPressed: () => Navigator.pop(context, controller.text.trim()),
+              child: const Text('Send')),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (text != null && text.isNotEmpty) client.sendChat(text);
+  }
+
+  Future<void> _sendPoint() async {
+    final client = _client;
+    final location = _locations[_deviceController.text.trim()];
+    if (client == null || !client.isConnected || location == null) return;
+    final controller = TextEditingController();
+    final name = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Add team point'),
+        content: TextField(
+            controller: controller,
+            autofocus: true,
+            decoration: const InputDecoration(labelText: 'Point name')),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel')),
+          FilledButton(
+              onPressed: () => Navigator.pop(context, controller.text.trim()),
+              child: const Text('Add')),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (name != null && name.isNotEmpty) {
+      client.sendPoint(
+          name: name,
+          latitude: location.latitude,
+          longitude: location.longitude);
+    }
+  }
+
+  void _sendSos() {
+    final client = _client;
+    final location = _locations[_deviceController.text.trim()];
+    if (client == null || !client.isConnected || location == null) return;
+    final activeEvents =
+        _sosEvents.values.where((event) => event['status'] == 'ACTIVE');
+    final active = activeEvents.isEmpty ? null : activeEvents.first;
+    client.sendSos(
+      eventId: active?['event_id'] as String? ?? newMessageId(),
+      status: active == null ? 'ACTIVE' : 'CANCELLED',
+      latitude: location.latitude,
+      longitude: location.longitude,
+    );
   }
 
   Future<void> _toggleSharing() async {
@@ -155,7 +255,8 @@ class _ClientHomePageState extends State<ClientHomePage> {
         );
         setState(() {
           _locations[location.deviceId] = location;
-          final trail = _trails.putIfAbsent(location.deviceId, () => <LatLng>[]);
+          final trail =
+              _trails.putIfAbsent(location.deviceId, () => <LatLng>[]);
           trail.add(LatLng(location.latitude, location.longitude));
           if (trail.length > 100) trail.removeAt(0);
         });
@@ -228,7 +329,10 @@ class _ClientHomePageState extends State<ClientHomePage> {
                       .map(
                         (entry) => Polyline(
                           points: entry.value,
-                          strokeWidth: entry.key == _deviceController.text.trim() ? 5 : 3,
+                          strokeWidth:
+                              entry.key == _deviceController.text.trim()
+                                  ? 5
+                                  : 3,
                           color: entry.key == _deviceController.text.trim()
                               ? Colors.indigo
                               : Colors.orange,
@@ -237,20 +341,42 @@ class _ClientHomePageState extends State<ClientHomePage> {
                       .toList(),
                 ),
                 MarkerLayer(
-                  markers: _locations.values
-                      .map(
-                        (location) => Marker(
-                          point: LatLng(location.latitude, location.longitude),
+                  markers: [
+                    ..._locations.values.map(
+                      (location) => Marker(
+                        point: LatLng(location.latitude, location.longitude),
+                        width: 48,
+                        height: 48,
+                        child: Tooltip(
+                          message:
+                              '${location.deviceName}\n${location.deviceId}\n${location.recordedAt}',
+                          child: const Icon(Icons.location_pin,
+                              color: Colors.red, size: 42),
+                        ),
+                      ),
+                    ),
+                    ..._points.values.map((point) => Marker(
+                          point: LatLng(point['latitude'] as double,
+                              point['longitude'] as double),
                           width: 48,
                           height: 48,
                           child: Tooltip(
-                            message:
-                                '${location.deviceName}\n${location.deviceId}\n${location.recordedAt}',
-                            child: const Icon(Icons.location_pin, color: Colors.red, size: 42),
+                            message: point['name'] as String,
+                            child: const Icon(Icons.flag,
+                                color: Colors.blue, size: 36),
                           ),
-                        ),
-                      )
-                      .toList(),
+                        )),
+                    ..._sosEvents.values
+                        .where((event) => event['status'] == 'ACTIVE')
+                        .map((event) => Marker(
+                              point: LatLng(event['latitude'] as double,
+                                  event['longitude'] as double),
+                              width: 52,
+                              height: 52,
+                              child: const Icon(Icons.warning,
+                                  color: Colors.red, size: 44),
+                            )),
+                  ],
                 ),
               ],
             ),
@@ -265,7 +391,9 @@ class _ClientHomePageState extends State<ClientHomePage> {
                     children: [
                       Expanded(child: Text(_status)),
                       FilledButton(
-                        onPressed: _client?.isConnected == true ? _toggleSharing : _connect,
+                        onPressed: _client?.isConnected == true
+                            ? _toggleSharing
+                            : _connect,
                         child: Text(_client?.isConnected == true
                             ? (_sharing ? 'Stop GPS' : 'Share GPS')
                             : 'Connect'),
@@ -290,7 +418,8 @@ class _ClientHomePageState extends State<ClientHomePage> {
                           children: _locations.values
                               .map(
                                 (location) => Chip(
-                                  avatar: const Icon(Icons.person_pin_circle, size: 18),
+                                  avatar: const Icon(Icons.person_pin_circle,
+                                      size: 18),
                                   label: Text(
                                     '${location.deviceName} · ${_formatAge(location.recordedAt)}',
                                   ),
@@ -299,6 +428,32 @@ class _ClientHomePageState extends State<ClientHomePage> {
                               .toList(),
                         ),
                 ),
+              ),
+            ),
+            Positioned(
+              right: 12,
+              bottom: 78,
+              child: Column(
+                children: [
+                  FloatingActionButton.small(
+                    heroTag: 'chat',
+                    onPressed: _client?.isConnected == true ? _sendChat : null,
+                    child: const Icon(Icons.chat),
+                  ),
+                  const SizedBox(height: 8),
+                  FloatingActionButton.small(
+                    heroTag: 'point',
+                    onPressed: _client?.isConnected == true ? _sendPoint : null,
+                    child: const Icon(Icons.flag),
+                  ),
+                  const SizedBox(height: 8),
+                  FloatingActionButton.small(
+                    heroTag: 'sos',
+                    backgroundColor: Colors.red,
+                    onPressed: _client?.isConnected == true ? _sendSos : null,
+                    child: const Icon(Icons.warning),
+                  ),
+                ],
               ),
             ),
           ],
@@ -341,16 +496,27 @@ class _SettingsSheet extends StatelessWidget {
         child: Wrap(
           runSpacing: 12,
           children: [
-            Text('Connection settings', style: Theme.of(context).textTheme.titleLarge),
-            TextField(controller: urlController, decoration: const InputDecoration(labelText: 'WebSocket URL')),
-            TextField(controller: teamController, decoration: const InputDecoration(labelText: 'Team ID')),
-            TextField(controller: deviceController, decoration: const InputDecoration(labelText: 'Device ID')),
-            TextField(controller: nameController, decoration: const InputDecoration(labelText: 'Device name')),
+            Text('Connection settings',
+                style: Theme.of(context).textTheme.titleLarge),
+            TextField(
+                controller: urlController,
+                decoration: const InputDecoration(labelText: 'WebSocket URL')),
+            TextField(
+                controller: teamController,
+                decoration: const InputDecoration(labelText: 'Team ID')),
+            TextField(
+                controller: deviceController,
+                decoration: const InputDecoration(labelText: 'Device ID')),
+            TextField(
+                controller: nameController,
+                decoration: const InputDecoration(labelText: 'Device name')),
             Row(
               children: [
-                FilledButton(onPressed: onConnect, child: const Text('Connect')),
+                FilledButton(
+                    onPressed: onConnect, child: const Text('Connect')),
                 const SizedBox(width: 12),
-                OutlinedButton(onPressed: onDisconnect, child: const Text('Disconnect')),
+                OutlinedButton(
+                    onPressed: onDisconnect, child: const Text('Disconnect')),
               ],
             ),
           ],

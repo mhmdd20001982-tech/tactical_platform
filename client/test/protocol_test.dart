@@ -32,6 +32,30 @@ void main() {
     expect(location.payload['recorded_at'], isA<int>());
   });
 
+  test('creates team CHAT, POINT, and SOS messages', () {
+    final chat = chatMessage(
+        deviceId: 'device-1', teamId: 'team-1', text: 'Status green');
+    final point = pointMessage(
+      deviceId: 'device-1',
+      teamId: 'team-1',
+      pointId: 'point-1',
+      name: 'Rally point',
+      latitude: 31.95,
+      longitude: 35.91,
+    );
+    final sos = sosMessage(
+      deviceId: 'device-1',
+      teamId: 'team-1',
+      eventId: 'sos-1',
+      status: 'ACTIVE',
+      latitude: 31.95,
+      longitude: 35.91,
+    );
+    expect(chat.payload['text'], 'Status green');
+    expect(point.payload['point_id'], 'point-1');
+    expect(sos.payload['status'], 'ACTIVE');
+  });
+
   test('parses the server ACK envelope', () {
     final ack = ProtocolMessage.fromJson({
       'v': 1,

@@ -120,6 +120,14 @@ export class SocketManager {
         `LOCATION received: device=${message.sender_id} name=${payload.device_name ?? "unknown"} ` +
           `lat=${payload.latitude} lon=${payload.longitude} team=${teamId}`,
       );
+    } else if (message.type === "CHAT") {
+      console.log(
+        `CHAT received: device=${message.sender_id} team=${teamId} text=${String(message.payload.text)}`,
+      );
+    } else if (message.type === "POINT" || message.type === "SOS") {
+      console.log(
+        `${message.type} received: device=${message.sender_id} team=${teamId}`,
+      );
     }
     for (const client of this.clients) {
       if (client.teamId === teamId && client.socket.readyState === WebSocket.OPEN) {

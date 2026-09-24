@@ -60,18 +60,22 @@ class TacticalClient {
         }
         if (message.type == 'ERROR' && !acknowledged.isCompleted) {
           acknowledged.completeError(
-            StateError(message.payload['message'] as String? ?? 'Handshake failed'),
+            StateError(
+                message.payload['message'] as String? ?? 'Handshake failed'),
           );
         }
         _messages.add(message);
       },
       onError: (Object error, StackTrace stackTrace) {
-        if (!acknowledged.isCompleted) acknowledged.completeError(error, stackTrace);
+        if (!acknowledged.isCompleted) {
+          acknowledged.completeError(error, stackTrace);
+        }
         _state = ClientConnectionState.disconnected;
       },
       onDone: () {
         if (!acknowledged.isCompleted) {
-          acknowledged.completeError(StateError('Connection closed during handshake'));
+          acknowledged
+              .completeError(StateError('Connection closed during handshake'));
         }
         _state = ClientConnectionState.disconnected;
       },
@@ -108,6 +112,50 @@ class TacticalClient {
       accuracy: accuracy,
     );
     _channel!.sink.add(jsonEncode(message.toJson()));
+  }
+
+  void sendChat(String text) {
+    _ensureConnected();
+    _channel!.sink.add(jsonEncode(chatMessage(
+      deviceId: deviceId,
+      teamId: teamId,
+      text: text,
+    ).toJson()));
+  }
+
+  void sendPoint({
+    required String name,
+    required double latitude,
+    required double longitude,
+    String? description,
+  }) {
+    _ensureConnected();
+    _channel!.sink.add(jsonEncode(pointMessage(
+      deviceId: deviceId,
+      teamId: teamId,
+      pointId: newMessageId(),
+      name: name,
+      latitude: latitude,
+      longitude: longitude,
+      description: description,
+    ).toJson()));
+  }
+
+  void sendSos({
+    required String eventId,
+    required String status,
+    required double latitude,
+    required double longitude,
+  }) {
+    _ensureConnected();
+    _channel!.sink.add(jsonEncode(sosMessage(
+      deviceId: deviceId,
+      teamId: teamId,
+      eventId: eventId,
+      status: status,
+      latitude: latitude,
+      longitude: longitude,
+    ).toJson()));
   }
 
   Future<void> disconnect() async {
