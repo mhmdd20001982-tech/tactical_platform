@@ -43,6 +43,7 @@ export class SocketManager {
   private connect(socket: WebSocket, _request: IncomingMessage): void {
     const client: Client = { socket, alive: true };
     this.clients.add(client);
+    console.log(`WebSocket client connected (active sessions: ${this.clients.size})`);
     socket.on("pong", () => (client.alive = true));
     socket.on("message", (data) => this.message(client, data));
     socket.on("close", () => this.remove(client));
@@ -100,12 +101,26 @@ export class SocketManager {
     client.deviceId = hello.device_id;
     client.teamId = teamId;
     this.devices.set(hello.device_id, Date.now());
+    console.log(
+      `HELLO accepted: device=${hello.device_id} name=${hello.name} team=${teamId}`,
+    );
     this.send(client, createMessage("ACK", "server", {
       acked_message_id: message.id,
     }, teamId));
   }
 
   private broadcast(message: ProtocolMessage, teamId: string): void {
+    if (message.type === "LOCATION") {
+      const payload = message.payload as {
+        latitude?: number;
+        longitude?: number;
+        device_name?: string;
+      };
+      console.log(
+        `LOCATION received: device=${message.sender_id} name=${payload.device_name ?? "unknown"} ` +
+          `lat=${payload.latitude} lon=${payload.longitude} team=${teamId}`,
+      );
+    }
     for (const client of this.clients) {
       if (client.teamId === teamId && client.socket.readyState === WebSocket.OPEN) {
         client.socket.send(JSON.stringify(message));
@@ -136,5 +151,9 @@ export class SocketManager {
     if (client.deviceId && !Array.from(this.clients).some((entry) => entry.deviceId === client.deviceId)) {
       this.devices.delete(client.deviceId);
     }
+    console.log(
+      `WebSocket client disconnected${client.deviceId ? `: device=${client.deviceId}` : ""} ` +
+        `(active sessions: ${this.clients.size})`,
+    );
   }
 }
