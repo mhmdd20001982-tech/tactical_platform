@@ -106,24 +106,25 @@ class _ClientHomePageState extends State<ClientHomePage> {
   void _receiveMessage(ProtocolMessage message) {
     if (message.type == 'CHAT') {
       final text = message.payload['text'] as String? ?? '';
+      if (!mounted) return;
       setState(
           () => _chatMessages.add({'sender': message.senderId, 'text': text}));
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('${message.senderId}: $text')),
-        );
-      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('${message.senderId}: $text')),
+      );
       return;
     }
     if (message.type == 'POINT') {
       final pointId = message.payload['point_id'] as String?;
       if (pointId == null) return;
+      if (!mounted) return;
       setState(() => _points[pointId] = message.payload);
       return;
     }
     if (message.type == 'SOS') {
       final eventId = message.payload['event_id'] as String?;
       if (eventId == null) return;
+      if (!mounted) return;
       setState(() => _sosEvents[eventId] = message.payload);
       return;
     }
@@ -149,26 +150,26 @@ class _ClientHomePageState extends State<ClientHomePage> {
   Future<void> _sendChat() async {
     final client = _client;
     if (client == null || !client.isConnected) return;
-    final controller = TextEditingController();
+    var draft = '';
     final text = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Team chat'),
         content: TextField(
-            controller: controller,
-            autofocus: true,
-            decoration: const InputDecoration(labelText: 'Message')),
+          autofocus: true,
+          onChanged: (value) => draft = value,
+          decoration: const InputDecoration(labelText: 'Message'),
+        ),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(context),
               child: const Text('Cancel')),
           FilledButton(
-              onPressed: () => Navigator.pop(context, controller.text.trim()),
+              onPressed: () => Navigator.pop(context, draft.trim()),
               child: const Text('Send')),
         ],
       ),
     );
-    controller.dispose();
     if (text != null && text.isNotEmpty) client.sendChat(text);
   }
 
@@ -176,26 +177,26 @@ class _ClientHomePageState extends State<ClientHomePage> {
     final client = _client;
     final location = _locations[_deviceController.text.trim()];
     if (client == null || !client.isConnected || location == null) return;
-    final controller = TextEditingController();
+    var draft = '';
     final name = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Add team point'),
         content: TextField(
-            controller: controller,
-            autofocus: true,
-            decoration: const InputDecoration(labelText: 'Point name')),
+          autofocus: true,
+          onChanged: (value) => draft = value,
+          decoration: const InputDecoration(labelText: 'Point name'),
+        ),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(context),
               child: const Text('Cancel')),
           FilledButton(
-              onPressed: () => Navigator.pop(context, controller.text.trim()),
+              onPressed: () => Navigator.pop(context, draft.trim()),
               child: const Text('Add')),
         ],
       ),
     );
-    controller.dispose();
     if (name != null && name.isNotEmpty) {
       client.sendPoint(
           name: name,
