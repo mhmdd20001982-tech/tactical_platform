@@ -7,10 +7,15 @@ import { SocketManager } from "./socket-manager";
 const host = process.env.HOST ?? "0.0.0.0";
 const port = Number(process.env.PORT ?? 8080);
 const heartbeatMs = Number(process.env.HEARTBEAT_MS ?? 30_000);
+const authToken = process.env.AUTH_TOKEN?.trim();
 const app = express();
 const httpServer = http.createServer(app);
 const webSocketServer = new WebSocketServer({ server: httpServer, maxPayload: 1024 * 1024 });
-const socketManager = new SocketManager(webSocketServer, heartbeatMs);
+const socketManager = new SocketManager(webSocketServer, heartbeatMs, authToken);
+
+if (!authToken) {
+  console.warn("AUTH_TOKEN is not set; WebSocket clients are unauthenticated");
+}
 
 app.get("/health", (_request, response) => {
   response.json({

@@ -1,4 +1,5 @@
 import { IncomingMessage } from "node:http";
+import { timingSafeEqual } from "node:crypto";
 import { RawData, WebSocket, WebSocketServer } from "ws";
 import {
   createMessage,
@@ -23,6 +24,7 @@ export class SocketManager {
   constructor(
     private readonly server: WebSocketServer,
     private readonly heartbeatMs: number,
+    private readonly authToken?: string,
   ) {
     this.server.on("connection", (socket, request) => this.connect(socket, request));
     this.heartbeatTimer = setInterval(() => this.heartbeat(), heartbeatMs);
@@ -98,6 +100,14 @@ export class SocketManager {
       }));
       return;
     }
+    if (this.authToken && !this.hasValidToken(hello.token)) {
+      console.warn(`HELLO rejected: invalid token from device=${hello.device_id}`);
+      this.send(client, createMessage("ERROR", "server", {
+        code: "unauthorized",
+        message: "Invalid authentication token",
+      }));
+      return;
+    }
     client.deviceId = hello.device_id;
     client.teamId = teamId;
     this.devices.set(hello.device_id, Date.now());
@@ -107,6 +117,13 @@ export class SocketManager {
     this.send(client, createMessage("ACK", "server", {
       acked_message_id: message.id,
     }, teamId));
+  }
+
+  private hasValidToken(token: string | undefined): boolean {
+    if (!this.authToken || token === undefined) return false;
+    const expected = Buffer.from(this.authToken);
+    const received = Buffer.from(token);
+    return expected.length === received.length && timingSafeEqual(expected, received);
   }
 
   private broadcast(message: ProtocolMessage, teamId: string): void {

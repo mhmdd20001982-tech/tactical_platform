@@ -38,6 +38,7 @@ class _ClientHomePageState extends State<ClientHomePage> {
   final _teamController = TextEditingController(text: 'demo-team');
   final _deviceController = TextEditingController(text: 'flutter-device-1');
   final _nameController = TextEditingController(text: 'Flutter Client');
+  final _tokenController = TextEditingController();
   final _mapController = MapController();
   final _locationService = LocationService();
   final Map<String, TeamLocation> _locations = {};
@@ -69,6 +70,7 @@ class _ClientHomePageState extends State<ClientHomePage> {
       _teamController,
       _deviceController,
       _nameController,
+      _tokenController,
     ]) {
       controller.dispose();
     }
@@ -82,6 +84,9 @@ class _ClientHomePageState extends State<ClientHomePage> {
       deviceId: _deviceController.text.trim(),
       deviceName: _nameController.text.trim(),
       teamId: _teamController.text.trim(),
+      token: _tokenController.text.trim().isEmpty
+          ? null
+          : _tokenController.text.trim(),
     );
     _client = client;
     _messageSubscription = client.messages.listen(_receiveMessage);
@@ -301,6 +306,7 @@ class _ClientHomePageState extends State<ClientHomePage> {
                   teamController: _teamController,
                   deviceController: _deviceController,
                   nameController: _nameController,
+                  tokenController: _tokenController,
                   onConnect: _connect,
                   onDisconnect: _disconnect,
                 ),
@@ -475,6 +481,7 @@ class _SettingsSheet extends StatelessWidget {
     required this.teamController,
     required this.deviceController,
     required this.nameController,
+    required this.tokenController,
     required this.onConnect,
     required this.onDisconnect,
   });
@@ -483,6 +490,7 @@ class _SettingsSheet extends StatelessWidget {
   final TextEditingController teamController;
   final TextEditingController deviceController;
   final TextEditingController nameController;
+  final TextEditingController tokenController;
   final VoidCallback onConnect;
   final VoidCallback onDisconnect;
 
@@ -511,6 +519,14 @@ class _SettingsSheet extends StatelessWidget {
             TextField(
                 controller: nameController,
                 decoration: const InputDecoration(labelText: 'Device name')),
+            TextField(
+              controller: tokenController,
+              obscureText: true,
+              autocorrect: false,
+              enableSuggestions: false,
+              decoration: const InputDecoration(
+                  labelText: 'Server authentication token'),
+            ),
             Row(
               children: [
                 FilledButton(
