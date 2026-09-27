@@ -1,8 +1,11 @@
-import "dotenv/config";
+import dotenv from "dotenv";
 import http from "node:http";
+import path from "node:path";
 import express from "express";
 import { WebSocketServer } from "ws";
 import { SocketManager } from "./socket-manager";
+
+dotenv.config({ path: path.join(__dirname, "../.env") });
 
 const host = process.env.HOST ?? "0.0.0.0";
 const port = Number(process.env.PORT ?? 8080);
