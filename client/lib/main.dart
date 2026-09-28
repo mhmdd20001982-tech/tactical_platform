@@ -86,6 +86,7 @@ class _ClientHomePageState extends State<ClientHomePage> {
   StreamSubscription<Position>? _locationSubscription;
   String _status = 'Disconnected';
   bool _sharing = false;
+  bool _selectingMapPoint = false;
   LatLng _mapCenter = const LatLng(31.95, 35.91);
 
   String _defaultWebSocketUrl() {
@@ -235,15 +236,39 @@ class _ClientHomePageState extends State<ClientHomePage> {
     final client = _client;
     final location = _locations[_deviceController.text.trim()];
     if (client == null || !client.isConnected || location == null) return;
+    await _promptAndSendPoint(
+      LatLng(location.latitude, location.longitude),
+    );
+  }
+
+  void _startMapPointSelection() {
+    if (_client?.isConnected != true) return;
+    setState(() => _selectingMapPoint = true);
+  }
+
+  Future<void> _promptAndSendPoint(LatLng location) async {
+    final client = _client;
+    if (client == null || !client.isConnected) return;
     var draft = '';
     final name = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Add team point'),
-        content: TextField(
-          autofocus: true,
-          onChanged: (value) => draft = value,
-          decoration: const InputDecoration(labelText: 'Point name'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Coordinates: ${location.latitude.toStringAsFixed(6)}, '
+              '${location.longitude.toStringAsFixed(6)}',
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              autofocus: true,
+              onChanged: (value) => draft = value,
+              decoration: const InputDecoration(labelText: 'Point name'),
+            ),
+          ],
         ),
         actions: [
           TextButton(
@@ -255,12 +280,18 @@ class _ClientHomePageState extends State<ClientHomePage> {
         ],
       ),
     );
-    if (name != null && name.isNotEmpty) {
+    if (name != null && name.isNotEmpty && mounted && client.isConnected) {
       client.sendPoint(
           name: name,
           latitude: location.latitude,
           longitude: location.longitude);
     }
+  }
+
+  Future<void> _handleMapTap(LatLng location) async {
+    if (!_selectingMapPoint) return;
+    setState(() => _selectingMapPoint = false);
+    await _promptAndSendPoint(location);
   }
 
   void _sendSos() {
@@ -400,7 +431,11 @@ class _ClientHomePageState extends State<ClientHomePage> {
           children: [
             FlutterMap(
               mapController: _mapController,
-              options: MapOptions(initialCenter: _mapCenter, initialZoom: 13),
+              options: MapOptions(
+                initialCenter: _mapCenter,
+                initialZoom: 13,
+                onTap: (_, location) => _handleMapTap(location),
+              ),
               children: [
                 TileLayer(
                   urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
@@ -449,7 +484,9 @@ class _ClientHomePageState extends State<ClientHomePage> {
                           width: 48,
                           height: 48,
                           child: Tooltip(
-                            message: point['name'] as String,
+                            message: '${point['name']}\n'
+                                '${(point['latitude'] as num).toDouble().toStringAsFixed(6)}, '
+                                '${(point['longitude'] as num).toDouble().toStringAsFixed(6)}',
                             child: const Icon(Icons.flag,
                                 color: Colors.blue, size: 36),
                           ),
@@ -512,6 +549,40 @@ class _ClientHomePageState extends State<ClientHomePage> {
                                 letterSpacing: 0.7,
                               ),
                             ),
+                            if (_selectingMapPoint)
+                              Positioned(
+                                left: 12,
+                                right: 12,
+                                top: 104,
+                                child: Card(
+                                  color: Theme.of(context).colorScheme.primary,
+                                  child: Padding(
+                                    padding:
+                                        const EdgeInsets.fromLTRB(14, 8, 6, 8),
+                                    child: Row(
+                                      children: [
+                                        const Icon(Icons.touch_app_rounded,
+                                            color: Colors.white),
+                                        const SizedBox(width: 10),
+                                        const Expanded(
+                                          child: Text(
+                                            'Tap the map to choose a team point',
+                                            style:
+                                                TextStyle(color: Colors.white),
+                                          ),
+                                        ),
+                                        IconButton(
+                                          tooltip: 'Cancel map selection',
+                                          onPressed: () => setState(
+                                              () => _selectingMapPoint = false),
+                                          icon: const Icon(Icons.close,
+                                              color: Colors.white),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ),
                           ],
                         ),
                       ),
@@ -631,9 +702,22 @@ class _ClientHomePageState extends State<ClientHomePage> {
                   const SizedBox(height: 8),
                   FloatingActionButton.small(
                     heroTag: 'point',
-                    tooltip: 'Add team point',
+                    tooltip: 'Add point at my location',
                     onPressed: _client?.isConnected == true ? _sendPoint : null,
                     child: const Icon(Icons.flag_rounded),
+                  ),
+                  const SizedBox(height: 8),
+                  FloatingActionButton.small(
+                    heroTag: 'map-point',
+                    tooltip: 'Choose point on map',
+                    backgroundColor: _selectingMapPoint
+                        ? Theme.of(context).colorScheme.primary
+                        : null,
+                    foregroundColor: _selectingMapPoint ? Colors.white : null,
+                    onPressed: _client?.isConnected == true
+                        ? _startMapPointSelection
+                        : null,
+                    child: const Icon(Icons.add_location_alt_rounded),
                   ),
                   const SizedBox(height: 8),
                   FloatingActionButton.small(
