@@ -1,0 +1,16 @@
+{
+  "name": "@tactical-platform/protocol",
+  "private": true,
+  "version": "0.1.0",
+  "main": "dist/src/messages.js",
+  "types": "dist/src/messages.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test dist/test/*.test.js"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2"
+  }
+}
