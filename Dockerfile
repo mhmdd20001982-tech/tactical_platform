@@ -25,6 +25,7 @@ COPY --from=build /app/server/package*.json ./server/
 COPY --from=build /app/server/dist ./server/dist
 RUN npm install --omit=dev --prefix protocol && npm install --omit=dev --prefix server
 
+RUN mkdir -p /app/server/data && chown -R node:node /app/server/data
 EXPOSE 8080
 USER node
 CMD ["node", "server/dist/server.js"]

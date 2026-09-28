@@ -46,8 +46,10 @@ class _ClientHomePageState extends State<ClientHomePage> {
   final Map<String, Map<String, dynamic>> _points = {};
   final Map<String, Map<String, dynamic>> _sosEvents = {};
   final List<Map<String, dynamic>> _chatMessages = [];
+  final Set<String> _seenMessageIds = {};
   TacticalClient? _client;
   StreamSubscription<ProtocolMessage>? _messageSubscription;
+  StreamSubscription<ClientConnectionState>? _connectionSubscription;
   StreamSubscription<Position>? _locationSubscription;
   String _status = 'Disconnected';
   bool _sharing = false;
@@ -64,6 +66,7 @@ class _ClientHomePageState extends State<ClientHomePage> {
   void dispose() {
     _locationSubscription?.cancel();
     _messageSubscription?.cancel();
+    _connectionSubscription?.cancel();
     _client?.dispose();
     for (final controller in [
       _urlController,
@@ -79,6 +82,15 @@ class _ClientHomePageState extends State<ClientHomePage> {
 
   Future<void> _connect() async {
     await _disconnect();
+    if (!mounted) return;
+    setState(() {
+      _locations.clear();
+      _trails.clear();
+      _points.clear();
+      _sosEvents.clear();
+      _chatMessages.clear();
+      _seenMessageIds.clear();
+    });
     final client = TacticalClient(
       serverUri: Uri.parse(_urlController.text.trim()),
       deviceId: _deviceController.text.trim(),
@@ -90,6 +102,18 @@ class _ClientHomePageState extends State<ClientHomePage> {
     );
     _client = client;
     _messageSubscription = client.messages.listen(_receiveMessage);
+    _connectionSubscription = client.connectionStates.listen((state) {
+      if (!mounted) return;
+      setState(() {
+        _status = switch (state) {
+          ClientConnectionState.disconnected => 'Disconnected',
+          ClientConnectionState.connecting => 'Connecting...',
+          ClientConnectionState.connected =>
+            _sharing ? 'Sharing GPS location' : 'Connected',
+          ClientConnectionState.reconnecting => 'Reconnecting...',
+        };
+      });
+    });
     setState(() => _status = 'Connecting...');
     try {
       await client.connect();
@@ -103,20 +127,25 @@ class _ClientHomePageState extends State<ClientHomePage> {
     await _stopSharing();
     await _messageSubscription?.cancel();
     _messageSubscription = null;
+    await _connectionSubscription?.cancel();
+    _connectionSubscription = null;
     await _client?.dispose();
     _client = null;
     if (mounted) setState(() => _status = 'Disconnected');
   }
 
   void _receiveMessage(ProtocolMessage message) {
+    if (!_seenMessageIds.add(message.id)) return;
     if (message.type == 'CHAT') {
       final text = message.payload['text'] as String? ?? '';
       if (!mounted) return;
       setState(
           () => _chatMessages.add({'sender': message.senderId, 'text': text}));
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('${message.senderId}: $text')),
-      );
+      if (message.payload['is_history'] != true) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('${message.senderId}: $text')),
+        );
+      }
       return;
     }
     if (message.type == 'POINT') {
@@ -160,10 +189,39 @@ class _ClientHomePageState extends State<ClientHomePage> {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Team chat'),
-        content: TextField(
-          autofocus: true,
-          onChanged: (value) => draft = value,
-          decoration: const InputDecoration(labelText: 'Message'),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (_chatMessages.isNotEmpty)
+                SizedBox(
+                  height: 180,
+                  child: ListView.builder(
+                    reverse: true,
+                    itemCount: _chatMessages.length,
+                    itemBuilder: (context, index) {
+                      final message =
+                          _chatMessages[_chatMessages.length - index - 1];
+                      return Align(
+                        alignment: Alignment.centerLeft,
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 4),
+                          child: Text(
+                            '${message['sender']}: ${message['text']}',
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              TextField(
+                autofocus: true,
+                onChanged: (value) => draft = value,
+                decoration: const InputDecoration(labelText: 'Message'),
+              ),
+            ],
+          ),
         ),
         actions: [
           TextButton(
@@ -245,12 +303,14 @@ class _ClientHomePageState extends State<ClientHomePage> {
     });
     _locationSubscription = _locationService.watch().listen(
       (position) {
-        client.sendLocation(
-          latitude: position.latitude,
-          longitude: position.longitude,
-          deviceName: client.deviceName,
-          accuracy: position.accuracy,
-        );
+        if (client.isConnected) {
+          client.sendLocation(
+            latitude: position.latitude,
+            longitude: position.longitude,
+            deviceName: client.deviceName,
+            accuracy: position.accuracy,
+          );
+        }
         final location = TeamLocation(
           deviceId: client.deviceId,
           deviceName: client.deviceName,
@@ -398,12 +458,8 @@ class _ClientHomePageState extends State<ClientHomePage> {
                     children: [
                       Expanded(child: Text(_status)),
                       FilledButton(
-                        onPressed: _client?.isConnected == true
-                            ? _toggleSharing
-                            : _connect,
-                        child: Text(_client?.isConnected == true
-                            ? (_sharing ? 'Stop GPS' : 'Share GPS')
-                            : 'Connect'),
+                        onPressed: _connectionAction(),
+                        child: Text(_connectionActionLabel()),
                       ),
                     ],
                   ),
@@ -472,6 +528,29 @@ class _ClientHomePageState extends State<ClientHomePage> {
     if (seconds < 5) return 'online';
     if (seconds < 60) return '${seconds}s ago';
     return '${seconds ~/ 60}m ago';
+  }
+
+  VoidCallback? _connectionAction() {
+    final client = _client;
+    if (client == null || client.state == ClientConnectionState.disconnected) {
+      return _connect;
+    }
+    if (client.state == ClientConnectionState.connecting ||
+        client.state == ClientConnectionState.reconnecting) {
+      return _disconnect;
+    }
+    return _toggleSharing;
+  }
+
+  String _connectionActionLabel() {
+    final client = _client;
+    if (client == null) return 'Connect';
+    return switch (client.state) {
+      ClientConnectionState.disconnected => 'Connect',
+      ClientConnectionState.connecting => 'Cancel connection',
+      ClientConnectionState.reconnecting => 'Cancel reconnect',
+      ClientConnectionState.connected => _sharing ? 'Stop GPS' : 'Share GPS',
+    };
   }
 }
 

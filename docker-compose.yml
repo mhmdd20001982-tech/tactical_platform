@@ -7,6 +7,9 @@ services:
       HOST: 0.0.0.0
       PORT: 8080
       HEARTBEAT_MS: ${HEARTBEAT_MS:-30000}
+      DATA_DIR: ${DATA_DIR:-/app/server/data}
+    volumes:
+      - tactical_data:${DATA_DIR:-/app/server/data}
     expose:
       - "8080"
     healthcheck:
@@ -38,3 +41,4 @@ services:
 volumes:
   caddy_data:
   caddy_config:
+  tactical_data:

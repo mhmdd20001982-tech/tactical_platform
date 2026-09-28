@@ -8,6 +8,7 @@ import {
   ProtocolError,
   ProtocolMessage,
 } from "@tactical-platform/protocol";
+import { MessageStore } from "./message-store";
 
 interface Client {
   socket: WebSocket;
@@ -24,6 +25,7 @@ export class SocketManager {
   constructor(
     private readonly server: WebSocketServer,
     private readonly heartbeatMs: number,
+    private readonly messageStore: MessageStore,
     private readonly authToken?: string,
   ) {
     this.server.on("connection", (socket, request) => this.connect(socket, request));
@@ -87,7 +89,7 @@ export class SocketManager {
       this.send(client, createMessage("PONG", "server", {}, client.teamId));
       return;
     }
-    this.broadcast(message, client.teamId);
+    this.broadcast(message, client.teamId, client);
   }
 
   private acceptHello(client: Client, message: ProtocolMessage): void {
@@ -117,6 +119,12 @@ export class SocketManager {
     this.send(client, createMessage("ACK", "server", {
       acked_message_id: message.id,
     }, teamId));
+    for (const storedMessage of this.messageStore.getTeamHistory(teamId)) {
+      this.send(client, {
+        ...storedMessage,
+        payload: { ...storedMessage.payload, is_history: true },
+      });
+    }
   }
 
   private hasValidToken(token: string | undefined): boolean {
@@ -126,7 +134,17 @@ export class SocketManager {
     return expected.length === received.length && timingSafeEqual(expected, received);
   }
 
-  private broadcast(message: ProtocolMessage, teamId: string): void {
+  private broadcast(message: ProtocolMessage, teamId: string, sender: Client): void {
+    try {
+      this.messageStore.record(message);
+    } catch (error) {
+      console.error("Failed to persist team message", error);
+      this.send(sender, createMessage("ERROR", "server", {
+        code: "storage_error",
+        message: "Message could not be saved; contact the server administrator",
+      }, teamId));
+      return;
+    }
     if (message.type === "LOCATION") {
       const payload = message.payload as {
         latitude?: number;

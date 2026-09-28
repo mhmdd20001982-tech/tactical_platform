@@ -5,7 +5,16 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 
 import 'protocol.dart';
 
-enum ClientConnectionState { disconnected, connecting, connected }
+enum ClientConnectionState {
+  disconnected,
+  connecting,
+  connected,
+  reconnecting,
+}
+
+class AuthenticationException extends StateError {
+  AuthenticationException(super.message);
+}
 
 class TacticalClient {
   TacticalClient({
@@ -14,6 +23,8 @@ class TacticalClient {
     required this.deviceName,
     required this.teamId,
     this.token,
+    this.reconnectInitialDelay = const Duration(seconds: 1),
+    this.reconnectMaxDelay = const Duration(seconds: 30),
   });
 
   final Uri serverUri;
@@ -21,22 +32,48 @@ class TacticalClient {
   final String deviceName;
   final String teamId;
   final String? token;
+  final Duration reconnectInitialDelay;
+  final Duration reconnectMaxDelay;
 
   final _messages = StreamController<ProtocolMessage>.broadcast();
+  final _connectionStates = StreamController<ClientConnectionState>.broadcast();
   WebSocketChannel? _channel;
   StreamSubscription<Object?>? _subscription;
-  String? _helloId;
+  Timer? _reconnectTimer;
   ClientConnectionState _state = ClientConnectionState.disconnected;
+  bool _reconnectEnabled = false;
+  bool _hasConnected = false;
+  bool _disposed = false;
+  int _reconnectAttempt = 0;
 
   Stream<ProtocolMessage> get messages => _messages.stream;
+  Stream<ClientConnectionState> get connectionStates =>
+      _connectionStates.stream;
   ClientConnectionState get state => _state;
   bool get isConnected => _state == ClientConnectionState.connected;
 
   Future<void> connect({
     Duration timeout = const Duration(seconds: 5),
   }) async {
-    if (_state != ClientConnectionState.disconnected) return;
-    _state = ClientConnectionState.connecting;
+    if (_state != ClientConnectionState.disconnected || _disposed) return;
+    _reconnectEnabled = true;
+    _setState(ClientConnectionState.connecting);
+    try {
+      await _openConnection(timeout: timeout);
+      _hasConnected = true;
+      _reconnectAttempt = 0;
+      _setState(ClientConnectionState.connected);
+    } catch (_) {
+      _reconnectEnabled = false;
+      await _closeCurrentChannel();
+      _setState(ClientConnectionState.disconnected);
+      rethrow;
+    }
+  }
+
+  Future<void> _openConnection({
+    required Duration timeout,
+  }) async {
     final channel = WebSocketChannel.connect(serverUri);
     _channel = channel;
     final hello = helloMessage(
@@ -45,55 +82,110 @@ class TacticalClient {
       teamId: teamId,
       token: token,
     );
-    _helloId = hello.id;
     final acknowledged = Completer<void>();
     _subscription = channel.stream.listen(
       (raw) {
-        final message = ProtocolMessage.fromJson(
-          jsonDecode(raw as String) as Map<String, dynamic>,
-        );
-        if (message.type == 'ACK' &&
-            message.payload['acked_message_id'] == _helloId &&
-            !acknowledged.isCompleted) {
-          acknowledged.complete();
-          _state = ClientConnectionState.connected;
-        }
-        if (message.type == 'ERROR' && !acknowledged.isCompleted) {
-          acknowledged.completeError(
-            StateError(
-                message.payload['message'] as String? ?? 'Handshake failed'),
+        try {
+          final message = ProtocolMessage.fromJson(
+            jsonDecode(raw as String) as Map<String, dynamic>,
           );
+          if (message.type == 'ACK' &&
+              message.payload['acked_message_id'] == hello.id &&
+              !acknowledged.isCompleted) {
+            acknowledged.complete();
+          }
+          if (message.type == 'ERROR' && !acknowledged.isCompleted) {
+            final errorMessage =
+                message.payload['message'] as String? ?? 'Handshake failed';
+            if (message.payload['code'] == 'unauthorized') {
+              acknowledged.completeError(AuthenticationException(errorMessage));
+            } else {
+              acknowledged.completeError(StateError(errorMessage));
+            }
+          }
+          _messages.add(message);
+        } catch (error, stackTrace) {
+          if (!acknowledged.isCompleted) {
+            acknowledged.completeError(error, stackTrace);
+          } else if (!_messages.isClosed) {
+            _messages.addError(error, stackTrace);
+          }
         }
-        _messages.add(message);
       },
       onError: (Object error, StackTrace stackTrace) {
         if (!acknowledged.isCompleted) {
           acknowledged.completeError(error, stackTrace);
         }
-        _state = ClientConnectionState.disconnected;
+        _handleConnectionEnded(channel);
       },
       onDone: () {
         if (!acknowledged.isCompleted) {
-          acknowledged
-              .completeError(StateError('Connection closed during handshake'));
+          acknowledged.completeError(
+            StateError('Connection closed during handshake'),
+          );
         }
-        _state = ClientConnectionState.disconnected;
+        _handleConnectionEnded(channel);
       },
+      cancelOnError: true,
     );
+
     try {
       // On Flutter Web, sending before the browser WebSocket reaches OPEN can
-      // leave the HELLO queued without a useful error. Wait for the channel
-      // handshake explicitly before writing the first protocol frame.
+      // leave the HELLO queued without a useful error. Wait for OPEN first.
       await channel.ready.timeout(timeout);
       channel.sink.add(jsonEncode(hello.toJson()));
       await acknowledged.future.timeout(timeout);
-    } on TimeoutException {
-      await disconnect();
-      throw StateError('WebSocket connection timed out: $serverUri');
     } catch (_) {
-      await disconnect();
+      if (identical(_channel, channel)) {
+        await _closeCurrentChannel();
+      }
       rethrow;
     }
+  }
+
+  void _handleConnectionEnded(WebSocketChannel channel) {
+    if (!identical(_channel, channel)) return;
+    _channel = null;
+    _subscription = null;
+    _setState(ClientConnectionState.disconnected);
+    if (_reconnectEnabled && _hasConnected && !_disposed) {
+      _scheduleReconnect();
+    }
+  }
+
+  void _scheduleReconnect() {
+    if (_reconnectTimer != null || !_reconnectEnabled || _disposed) return;
+    _setState(ClientConnectionState.reconnecting);
+    final multiplier = 1 << _reconnectAttempt.clamp(0, 10).toInt();
+    final delay = reconnectInitialDelay * multiplier;
+    _reconnectAttempt++;
+    _reconnectTimer = Timer(
+      delay > reconnectMaxDelay ? reconnectMaxDelay : delay,
+      () => unawaited(_attemptReconnect()),
+    );
+  }
+
+  Future<void> _attemptReconnect() async {
+    _reconnectTimer = null;
+    if (!_reconnectEnabled || _disposed) return;
+    try {
+      await _openConnection(timeout: const Duration(seconds: 5));
+      _reconnectAttempt = 0;
+      _setState(ClientConnectionState.connected);
+    } on AuthenticationException {
+      _reconnectEnabled = false;
+      await _closeCurrentChannel();
+      _setState(ClientConnectionState.disconnected);
+    } catch (_) {
+      await _closeCurrentChannel();
+      if (_reconnectEnabled && !_disposed) _scheduleReconnect();
+    }
+  }
+
+  void _setState(ClientConnectionState state) {
+    if (_state == state) return;
+    _state = state;
+    if (!_connectionStates.isClosed) _connectionStates.add(state);
   }
 
   void sendLocation({
@@ -159,16 +251,29 @@ class TacticalClient {
   }
 
   Future<void> disconnect() async {
-    await _subscription?.cancel();
+    _reconnectEnabled = false;
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
+    await _closeCurrentChannel();
+    _hasConnected = false;
+    _setState(ClientConnectionState.disconnected);
+  }
+
+  Future<void> _closeCurrentChannel() async {
+    final subscription = _subscription;
     _subscription = null;
-    await _channel?.sink.close();
+    final channel = _channel;
     _channel = null;
-    _state = ClientConnectionState.disconnected;
+    await subscription?.cancel();
+    await channel?.sink.close();
   }
 
   Future<void> dispose() async {
+    if (_disposed) return;
+    _disposed = true;
     await disconnect();
     await _messages.close();
+    await _connectionStates.close();
   }
 
   void _ensureConnected() {
