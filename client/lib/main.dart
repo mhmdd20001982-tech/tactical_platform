@@ -20,7 +20,39 @@ class TacticalPlatformApp extends StatelessWidget {
   Widget build(BuildContext context) => MaterialApp(
         title: 'Tactical Platform',
         theme: ThemeData(
-            colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo)),
+          useMaterial3: true,
+          colorScheme: ColorScheme.fromSeed(
+            seedColor: const Color(0xFF176B5B),
+            surface: const Color(0xFFF5F8F6),
+          ),
+          scaffoldBackgroundColor: const Color(0xFFF5F8F6),
+          appBarTheme: const AppBarTheme(
+            backgroundColor: Color(0xFF123B35),
+            foregroundColor: Colors.white,
+            elevation: 0,
+            centerTitle: false,
+          ),
+          floatingActionButtonTheme: const FloatingActionButtonThemeData(
+            backgroundColor: Color(0xFFE5F1EC),
+            foregroundColor: Color(0xFF164F45),
+          ),
+          inputDecorationTheme: InputDecorationTheme(
+            filled: true,
+            fillColor: const Color(0xFFF5F8F6),
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(14),
+              borderSide: BorderSide.none,
+            ),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(14),
+              borderSide: const BorderSide(color: Color(0xFFDCE6E1)),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(14),
+              borderSide: const BorderSide(color: Color(0xFF176B5B), width: 2),
+            ),
+          ),
+        ),
         home: const ClientHomePage(),
       );
 }
@@ -45,7 +77,8 @@ class _ClientHomePageState extends State<ClientHomePage> {
   final Map<String, List<LatLng>> _trails = {};
   final Map<String, Map<String, dynamic>> _points = {};
   final Map<String, Map<String, dynamic>> _sosEvents = {};
-  final List<Map<String, dynamic>> _chatMessages = [];
+  final ValueNotifier<List<Map<String, String>>> _chatMessages =
+      ValueNotifier([]);
   final Set<String> _seenMessageIds = {};
   TacticalClient? _client;
   StreamSubscription<ProtocolMessage>? _messageSubscription;
@@ -68,6 +101,7 @@ class _ClientHomePageState extends State<ClientHomePage> {
     _messageSubscription?.cancel();
     _connectionSubscription?.cancel();
     _client?.dispose();
+    _chatMessages.dispose();
     for (final controller in [
       _urlController,
       _teamController,
@@ -88,7 +122,7 @@ class _ClientHomePageState extends State<ClientHomePage> {
       _trails.clear();
       _points.clear();
       _sosEvents.clear();
-      _chatMessages.clear();
+      _chatMessages.value = [];
       _seenMessageIds.clear();
     });
     final client = TacticalClient(
@@ -139,13 +173,10 @@ class _ClientHomePageState extends State<ClientHomePage> {
     if (message.type == 'CHAT') {
       final text = message.payload['text'] as String? ?? '';
       if (!mounted) return;
-      setState(
-          () => _chatMessages.add({'sender': message.senderId, 'text': text}));
-      if (message.payload['is_history'] != true) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('${message.senderId}: $text')),
-        );
-      }
+      _chatMessages.value = [
+        ..._chatMessages.value,
+        {'sender': message.senderId, 'text': text},
+      ];
       return;
     }
     if (message.type == 'POINT') {
@@ -182,58 +213,22 @@ class _ClientHomePageState extends State<ClientHomePage> {
   }
 
   Future<void> _sendChat() async {
-    final client = _client;
-    if (client == null || !client.isConnected) return;
-    var draft = '';
-    final text = await showDialog<String>(
+    await showModalBottomSheet<void>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Team chat'),
-        content: SizedBox(
-          width: double.maxFinite,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (_chatMessages.isNotEmpty)
-                SizedBox(
-                  height: 180,
-                  child: ListView.builder(
-                    reverse: true,
-                    itemCount: _chatMessages.length,
-                    itemBuilder: (context, index) {
-                      final message =
-                          _chatMessages[_chatMessages.length - index - 1];
-                      return Align(
-                        alignment: Alignment.centerLeft,
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 4),
-                          child: Text(
-                            '${message['sender']}: ${message['text']}',
-                          ),
-                        ),
-                      );
-                    },
-                  ),
-                ),
-              TextField(
-                autofocus: true,
-                onChanged: (value) => draft = value,
-                decoration: const InputDecoration(labelText: 'Message'),
-              ),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel')),
-          FilledButton(
-              onPressed: () => Navigator.pop(context, draft.trim()),
-              child: const Text('Send')),
-        ],
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (_) => _TeamChatSheet(
+        messages: _chatMessages,
+        canSend: _client?.isConnected == true,
+        deviceId: _deviceController.text.trim(),
+        connectionStates: _client?.connectionStates ??
+            const Stream<ClientConnectionState>.empty(),
+        onSend: (text) {
+          final client = _client;
+          if (client?.isConnected == true) client!.sendChat(text);
+        },
       ),
     );
-    if (text != null && text.isNotEmpty) client.sendChat(text);
   }
 
   Future<void> _sendPoint() async {
@@ -354,13 +349,39 @@ class _ClientHomePageState extends State<ClientHomePage> {
   @override
   Widget build(BuildContext context) => Scaffold(
         appBar: AppBar(
-          title: const Text('Tactical Platform'),
+          title: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                'Tactical Platform',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+              ),
+              Text(
+                'إعداد م. محمد ذنيبات',
+                textDirection: TextDirection.rtl,
+                style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.78),
+                  fontSize: 11,
+                  fontWeight: FontWeight.w400,
+                ),
+              ),
+            ],
+          ),
+          toolbarHeight: 68,
           actions: [
             IconButton(
               tooltip: 'Connection settings',
               onPressed: () => showModalBottomSheet<void>(
                 context: context,
                 isScrollControlled: true,
+                showDragHandle: true,
+                backgroundColor: Colors.white,
+                shape: const RoundedRectangleBorder(
+                  borderRadius: BorderRadius.vertical(
+                    top: Radius.circular(24),
+                  ),
+                ),
                 builder: (_) => _SettingsSheet(
                   urlController: _urlController,
                   teamController: _teamController,
@@ -371,7 +392,7 @@ class _ClientHomePageState extends State<ClientHomePage> {
                   onDisconnect: _disconnect,
                 ),
               ),
-              icon: const Icon(Icons.settings),
+              icon: const Icon(Icons.tune_rounded),
             ),
           ],
         ),
@@ -452,13 +473,58 @@ class _ClientHomePageState extends State<ClientHomePage> {
               right: 12,
               top: 12,
               child: Card(
+                color: Colors.white.withValues(alpha: 0.96),
+                elevation: 5,
+                shadowColor: const Color(0x33123B35),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(20),
+                  side: const BorderSide(color: Color(0xFFE6ECE8)),
+                ),
                 child: Padding(
-                  padding: const EdgeInsets.all(12),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
                   child: Row(
                     children: [
-                      Expanded(child: Text(_status)),
+                      _ConnectionIndicator(
+                        connected: _client?.isConnected == true,
+                        reconnecting: _client?.state ==
+                            ClientConnectionState.reconnecting,
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              _status,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style:
+                                  const TextStyle(fontWeight: FontWeight.w600),
+                            ),
+                            Text(
+                              'TEAM  ${_teamController.text.trim()}',
+                              style: TextStyle(
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .onSurfaceVariant,
+                                fontSize: 11,
+                                letterSpacing: 0.7,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 8),
                       FilledButton(
                         onPressed: _connectionAction(),
+                        style: FilledButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(horizontal: 16),
+                          minimumSize: const Size(0, 44),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                        ),
                         child: Text(_connectionActionLabel()),
                       ),
                     ],
@@ -471,50 +537,112 @@ class _ClientHomePageState extends State<ClientHomePage> {
               right: 12,
               bottom: 12,
               child: Card(
+                color: Colors.white.withValues(alpha: 0.97),
+                elevation: 5,
+                shadowColor: const Color(0x33123B35),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(20),
+                  side: const BorderSide(color: Color(0xFFE6ECE8)),
+                ),
                 child: Padding(
-                  padding: const EdgeInsets.all(10),
-                  child: _locations.isEmpty
-                      ? const Text('No team locations received')
-                      : Wrap(
-                          spacing: 12,
-                          runSpacing: 6,
-                          children: _locations.values
-                              .map(
-                                (location) => Chip(
-                                  avatar: const Icon(Icons.person_pin_circle,
-                                      size: 18),
-                                  label: Text(
-                                    '${location.deviceName} · ${_formatAge(location.recordedAt)}',
-                                  ),
+                  padding: const EdgeInsets.fromLTRB(14, 12, 14, 10),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Row(
+                        children: [
+                          const Icon(Icons.groups_2_rounded,
+                              color: Color(0xFF176B5B), size: 19),
+                          const SizedBox(width: 7),
+                          const Text(
+                            'TEAM MEMBERS',
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: 1,
+                            ),
+                          ),
+                          const Spacer(),
+                          Text(
+                            '${_locations.length} tracked',
+                            style: TextStyle(
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .onSurfaceVariant,
+                              fontSize: 11,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      if (_locations.isEmpty)
+                        Text(
+                          'No team locations received',
+                          style: TextStyle(
+                            color:
+                                Theme.of(context).colorScheme.onSurfaceVariant,
+                          ),
+                        )
+                      else
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 2,
+                          children: _locations.values.map((location) {
+                            final online =
+                                DateTime.now().difference(location.recordedAt) <
+                                    const Duration(seconds: 30);
+                            return Chip(
+                              backgroundColor: const Color(0xFFF0F6F2),
+                              side: const BorderSide(color: Color(0xFFDCE9E1)),
+                              avatar: Icon(
+                                Icons.person_pin_circle_rounded,
+                                color: online
+                                    ? const Color(0xFF16805D)
+                                    : const Color(0xFF8B9690),
+                                size: 19,
+                              ),
+                              label: Text(
+                                '${location.deviceName} · ${_formatAge(location.recordedAt)}',
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w600,
+                                  fontSize: 12,
                                 ),
-                              )
-                              .toList(),
+                              ),
+                            );
+                          }).toList(),
                         ),
+                    ],
+                  ),
                 ),
               ),
             ),
             Positioned(
               right: 12,
-              bottom: 78,
+              bottom: 105,
               child: Column(
                 children: [
                   FloatingActionButton.small(
                     heroTag: 'chat',
-                    onPressed: _client?.isConnected == true ? _sendChat : null,
-                    child: const Icon(Icons.chat),
+                    tooltip: 'Team chat',
+                    onPressed: _sendChat,
+                    child: const Icon(Icons.forum_rounded),
                   ),
                   const SizedBox(height: 8),
                   FloatingActionButton.small(
                     heroTag: 'point',
+                    tooltip: 'Add team point',
                     onPressed: _client?.isConnected == true ? _sendPoint : null,
-                    child: const Icon(Icons.flag),
+                    child: const Icon(Icons.flag_rounded),
                   ),
                   const SizedBox(height: 8),
                   FloatingActionButton.small(
                     heroTag: 'sos',
-                    backgroundColor: Colors.red,
+                    tooltip: 'Send or cancel SOS',
+                    backgroundColor: Colors.red.shade600,
+                    foregroundColor: Colors.white,
                     onPressed: _client?.isConnected == true ? _sendSos : null,
-                    child: const Icon(Icons.warning),
+                    child: const Icon(Icons.warning_amber_rounded),
                   ),
                 ],
               ),
@@ -554,6 +682,251 @@ class _ClientHomePageState extends State<ClientHomePage> {
   }
 }
 
+class _ConnectionIndicator extends StatelessWidget {
+  const _ConnectionIndicator({
+    required this.connected,
+    required this.reconnecting,
+  });
+
+  final bool connected;
+  final bool reconnecting;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = connected
+        ? const Color(0xFF16805D)
+        : reconnecting
+            ? const Color(0xFFE29B22)
+            : const Color(0xFF9AA6A0);
+    return Container(
+      width: 42,
+      height: 42,
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Icon(
+        connected ? Icons.wifi_rounded : Icons.wifi_off_rounded,
+        color: color,
+        size: 21,
+      ),
+    );
+  }
+}
+
+class _TeamChatSheet extends StatefulWidget {
+  const _TeamChatSheet({
+    required this.messages,
+    required this.canSend,
+    required this.deviceId,
+    required this.connectionStates,
+    required this.onSend,
+  });
+
+  final ValueListenable<List<Map<String, String>>> messages;
+  final bool canSend;
+  final String deviceId;
+  final Stream<ClientConnectionState> connectionStates;
+  final ValueChanged<String> onSend;
+
+  @override
+  State<_TeamChatSheet> createState() => _TeamChatSheetState();
+}
+
+class _TeamChatSheetState extends State<_TeamChatSheet> {
+  final _messageController = TextEditingController();
+  late bool _canSend;
+  StreamSubscription<ClientConnectionState>? _connectionSubscription;
+
+  @override
+  void initState() {
+    super.initState();
+    _canSend = widget.canSend;
+    _connectionSubscription = widget.connectionStates.listen((state) {
+      if (mounted) {
+        setState(() => _canSend = state == ClientConnectionState.connected);
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _connectionSubscription?.cancel();
+    _messageController.dispose();
+    super.dispose();
+  }
+
+  void _send() {
+    final text = _messageController.text.trim();
+    if (!_canSend || text.isEmpty) return;
+    widget.onSend(text);
+    _messageController.clear();
+  }
+
+  @override
+  Widget build(BuildContext context) => SafeArea(
+        child: SizedBox(
+          height: MediaQuery.sizeOf(context).height * 0.7,
+          child: Padding(
+            padding: EdgeInsets.only(
+              left: 16,
+              right: 16,
+              bottom: MediaQuery.viewInsetsOf(context).bottom + 16,
+            ),
+            child: Column(
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      width: 42,
+                      height: 42,
+                      decoration: BoxDecoration(
+                        color: Theme.of(context).colorScheme.primaryContainer,
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                      child: Icon(
+                        Icons.forum_rounded,
+                        color: Theme.of(context).colorScheme.primary,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('Team chat',
+                              style: Theme.of(context).textTheme.titleLarge),
+                          Text(
+                            'Messages are shared with your team',
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                        ],
+                      ),
+                    ),
+                    ValueListenableBuilder<List<Map<String, String>>>(
+                      valueListenable: widget.messages,
+                      builder: (context, messages, _) => Text(
+                        '${messages.length}',
+                        style: Theme.of(context).textTheme.labelLarge,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                Expanded(
+                  child: ValueListenableBuilder<List<Map<String, String>>>(
+                    valueListenable: widget.messages,
+                    builder: (context, messages, _) {
+                      if (messages.isEmpty) {
+                        return Center(
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.mark_chat_unread_outlined,
+                                  size: 44,
+                                  color: Theme.of(context)
+                                      .colorScheme
+                                      .onSurfaceVariant),
+                              const SizedBox(height: 8),
+                              const Text('No messages yet'),
+                            ],
+                          ),
+                        );
+                      }
+                      return ListView.builder(
+                        reverse: true,
+                        itemCount: messages.length,
+                        itemBuilder: (context, index) {
+                          final message = messages[messages.length - index - 1];
+                          final isMine = message['sender'] == widget.deviceId;
+                          final bubbleColor = isMine
+                              ? Theme.of(context).colorScheme.primary
+                              : Colors.white;
+                          return Align(
+                            alignment: isMine
+                                ? Alignment.centerRight
+                                : Alignment.centerLeft,
+                            child: Card(
+                              color: bubbleColor,
+                              elevation: 1,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(16),
+                                side: BorderSide(
+                                  color: isMine
+                                      ? Colors.transparent
+                                      : const Color(0xFFE3EAE6),
+                                ),
+                              ),
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 14, vertical: 9),
+                                child: Column(
+                                  crossAxisAlignment: isMine
+                                      ? CrossAxisAlignment.end
+                                      : CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      message['sender'] ?? '',
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .labelSmall
+                                          ?.copyWith(
+                                            color: isMine
+                                                ? Colors.white70
+                                                : Theme.of(context)
+                                                    .colorScheme
+                                                    .onSurfaceVariant,
+                                          ),
+                                    ),
+                                    Text(
+                                      message['text'] ?? '',
+                                      style: TextStyle(
+                                        color: isMine
+                                            ? Colors.white
+                                            : Theme.of(context)
+                                                .colorScheme
+                                                .onSurface,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          );
+                        },
+                      );
+                    },
+                  ),
+                ),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _messageController,
+                        enabled: _canSend,
+                        textInputAction: TextInputAction.send,
+                        onSubmitted: (_) => _send(),
+                        decoration: InputDecoration(
+                          labelText: _canSend
+                              ? 'Message'
+                              : 'Connect to send a message',
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: 'Send message',
+                      onPressed: _canSend ? _send : null,
+                      icon: const Icon(Icons.send),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+}
+
 class _SettingsSheet extends StatelessWidget {
   const _SettingsSheet({
     required this.urlController,
@@ -584,8 +957,26 @@ class _SettingsSheet extends StatelessWidget {
         child: Wrap(
           runSpacing: 12,
           children: [
-            Text('Connection settings',
-                style: Theme.of(context).textTheme.titleLarge),
+            Row(
+              children: [
+                Container(
+                  width: 42,
+                  height: 42,
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).colorScheme.primaryContainer,
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  child: Icon(
+                    Icons.tune_rounded,
+                    color: Theme.of(context).colorScheme.primary,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Text('Connection settings',
+                    style: Theme.of(context).textTheme.titleLarge),
+              ],
+            ),
+            const SizedBox(height: 4),
             TextField(
                 controller: urlController,
                 decoration: const InputDecoration(labelText: 'WebSocket URL')),
