@@ -10,6 +10,7 @@ void main() {
       () async {
     final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     var acceptedConnections = 0;
+    int? receivedRecordedAt;
     final sockets = <WebSocket>[];
     final serverSubscription = server.listen((request) async {
       final socket = await WebSocketTransformer.upgrade(request);
@@ -18,18 +19,31 @@ void main() {
       sockets.add(socket);
       socket.listen((raw) {
         final message = jsonDecode(raw as String) as Map<String, dynamic>;
-        if (message['type'] != 'HELLO') return;
-        socket.add(jsonEncode({
-          'v': 1,
-          'type': 'ACK',
-          'id': 'ack-$connectionNumber',
-          'sender_id': 'server',
-          'ts': DateTime.now().millisecondsSinceEpoch,
-          'team_id': 'test-team',
-          'payload': {'acked_message_id': message['id']},
-        }));
-        if (connectionNumber == 1) {
-          Timer(const Duration(milliseconds: 50), socket.close);
+        if (message['type'] == 'HELLO') {
+          socket.add(jsonEncode({
+            'v': 1,
+            'type': 'ACK',
+            'id': 'ack-$connectionNumber',
+            'sender_id': 'server',
+            'ts': DateTime.now().millisecondsSinceEpoch,
+            'team_id': 'test-team',
+            'payload': {'acked_message_id': message['id']},
+          }));
+          if (connectionNumber == 1) {
+            Timer(const Duration(milliseconds: 50), socket.close);
+          }
+        } else if (message['type'] == 'LOCATION') {
+          receivedRecordedAt = (message['payload']
+              as Map<String, dynamic>)['recorded_at'] as int;
+          socket.add(jsonEncode({
+            'v': 1,
+            'type': 'ACK',
+            'id': 'location-ack-$connectionNumber',
+            'sender_id': 'server',
+            'ts': DateTime.now().millisecondsSinceEpoch,
+            'team_id': 'test-team',
+            'payload': {'acked_message_id': message['id']},
+          }));
         }
       });
     });
@@ -58,6 +72,14 @@ void main() {
       await secondConnection.future.timeout(const Duration(seconds: 3));
       expect(acceptedConnections, greaterThanOrEqualTo(2));
       expect(client.isConnected, isTrue);
+      final recordedAt = DateTime.utc(2026, 9, 28, 11);
+      await client.sendLocationAcknowledged(
+        latitude: 31.9,
+        longitude: 35.8,
+        deviceName: 'Test device',
+        recordedAt: recordedAt,
+      );
+      expect(receivedRecordedAt, recordedAt.millisecondsSinceEpoch);
 
       final reconnecting = client.connectionStates
           .firstWhere((state) => state == ClientConnectionState.reconnecting)

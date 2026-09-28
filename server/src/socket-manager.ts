@@ -169,6 +169,9 @@ export class SocketManager {
         client.socket.send(JSON.stringify(message));
       }
     }
+    this.send(sender, createMessage("ACK", "server", {
+      acked_message_id: message.id,
+    }, teamId));
   }
 
   private heartbeat(): void {

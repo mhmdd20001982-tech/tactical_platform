@@ -88,6 +88,7 @@ ProtocolMessage locationMessage({
   required double longitude,
   required String deviceName,
   double? accuracy,
+  DateTime? recordedAt,
 }) =>
     ProtocolMessage(
       type: 'LOCATION',
@@ -99,7 +100,7 @@ ProtocolMessage locationMessage({
         'latitude': latitude,
         'longitude': longitude,
         'device_name': deviceName,
-        'recorded_at': DateTime.now().millisecondsSinceEpoch,
+        'recorded_at': (recordedAt ?? DateTime.now()).millisecondsSinceEpoch,
         if (accuracy != null) 'accuracy': accuracy,
       },
     );

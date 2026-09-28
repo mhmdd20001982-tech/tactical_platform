@@ -33,4 +33,13 @@ void main() {
 
     expect(mapPointButton.onPressed, isNull);
   });
+
+  testWidgets('opens distance measurement mode over the map', (tester) async {
+    await tester.pumpWidget(const TacticalPlatformApp());
+    await tester.tap(find.byTooltip('Measure distance'));
+    await tester.pump();
+
+    expect(find.text('Tap the map to add measurement points'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
 }

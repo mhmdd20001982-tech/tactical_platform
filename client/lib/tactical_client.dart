@@ -37,6 +37,7 @@ class TacticalClient {
 
   final _messages = StreamController<ProtocolMessage>.broadcast();
   final _connectionStates = StreamController<ClientConnectionState>.broadcast();
+  final Map<String, Completer<void>> _locationAcks = {};
   WebSocketChannel? _channel;
   StreamSubscription<Object?>? _subscription;
   Timer? _reconnectTimer;
@@ -94,6 +95,14 @@ class TacticalClient {
               !acknowledged.isCompleted) {
             acknowledged.complete();
           }
+          if (message.type == 'ACK') {
+            final acknowledgedId =
+                message.payload['acked_message_id'] as String?;
+            final locationAck = _locationAcks.remove(acknowledgedId);
+            if (locationAck != null && !locationAck.isCompleted) {
+              locationAck.complete();
+            }
+          }
           if (message.type == 'ERROR' && !acknowledged.isCompleted) {
             final errorMessage =
                 message.payload['message'] as String? ?? 'Handshake failed';
@@ -147,6 +156,7 @@ class TacticalClient {
     if (!identical(_channel, channel)) return;
     _channel = null;
     _subscription = null;
+    _failPendingLocationAcks();
     _setState(ClientConnectionState.disconnected);
     if (_reconnectEnabled && _hasConnected && !_disposed) {
       _scheduleReconnect();
@@ -206,6 +216,34 @@ class TacticalClient {
     _channel!.sink.add(jsonEncode(message.toJson()));
   }
 
+  Future<void> sendLocationAcknowledged({
+    required double latitude,
+    required double longitude,
+    required String deviceName,
+    required DateTime recordedAt,
+    double? accuracy,
+    Duration timeout = const Duration(seconds: 8),
+  }) async {
+    _ensureConnected();
+    final message = locationMessage(
+      deviceId: deviceId,
+      teamId: teamId,
+      latitude: latitude,
+      longitude: longitude,
+      deviceName: deviceName,
+      accuracy: accuracy,
+      recordedAt: recordedAt,
+    );
+    final acknowledgement = Completer<void>();
+    _locationAcks[message.id] = acknowledgement;
+    try {
+      _channel!.sink.add(jsonEncode(message.toJson()));
+      await acknowledgement.future.timeout(timeout);
+    } finally {
+      _locationAcks.remove(message.id);
+    }
+  }
+
   void sendChat(String text) {
     _ensureConnected();
     _channel!.sink.add(jsonEncode(chatMessage(
@@ -260,12 +298,25 @@ class TacticalClient {
   }
 
   Future<void> _closeCurrentChannel() async {
+    _failPendingLocationAcks();
     final subscription = _subscription;
     _subscription = null;
     final channel = _channel;
     _channel = null;
     await subscription?.cancel();
     await channel?.sink.close();
+  }
+
+  void _failPendingLocationAcks() {
+    final pending = _locationAcks.values.toList();
+    _locationAcks.clear();
+    for (final acknowledgement in pending) {
+      if (!acknowledgement.isCompleted) {
+        acknowledgement.completeError(
+          StateError('Connection closed before location acknowledgement'),
+        );
+      }
+    }
   }
 
   Future<void> dispose() async {

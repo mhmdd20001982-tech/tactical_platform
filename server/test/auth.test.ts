@@ -158,7 +158,9 @@ test("restores retained team messages after an authenticated HELLO", async () =>
   }));
   await originalAck;
 
-  const locationBroadcast = once(originalSocket, "message");
+  const readOriginalMessage = createMessageReader(originalSocket);
+  const locationBroadcast = readOriginalMessage();
+  const locationAcknowledgement = readOriginalMessage();
   originalSocket.send(JSON.stringify({
     v: 1,
     type: "LOCATION",
@@ -173,7 +175,18 @@ test("restores retained team messages after an authenticated HELLO", async () =>
       device_name: "Original",
     },
   }));
-  await locationBroadcast;
+  const echoedLocation = JSON.parse((await locationBroadcast).toString()) as {
+    type: string;
+    id: string;
+  };
+  const locationAck = JSON.parse((await locationAcknowledgement).toString()) as {
+    type: string;
+    payload: { acked_message_id: string };
+  };
+  assert.equal(echoedLocation.type, "LOCATION");
+  assert.equal(echoedLocation.id, "location-retained");
+  assert.equal(locationAck.type, "ACK");
+  assert.equal(locationAck.payload.acked_message_id, "location-retained");
 
   const reconnectingSocket = new WebSocket(address);
   await once(reconnectingSocket, "open");

@@ -5,10 +5,13 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'location_models.dart';
 import 'location_service.dart';
+import 'offline_location_queue.dart';
 import 'protocol.dart';
+import 'route_measurement.dart';
 import 'tactical_client.dart';
 
 void main() => runApp(const TacticalPlatformApp());
@@ -87,6 +90,14 @@ class _ClientHomePageState extends State<ClientHomePage> {
   String _status = 'Disconnected';
   bool _sharing = false;
   bool _selectingMapPoint = false;
+  bool _measuringDistance = false;
+  bool _flushingLocations = false;
+  OfflineLocationQueue? _offlineQueue;
+  int _queuedLocationCount = 0;
+  String? _queueError;
+  final List<LatLng> _measurementPoints = [];
+  int _queueIdCounter = 0;
+  late Future<void> _queueInitialization;
   LatLng _mapCenter = const LatLng(31.95, 35.91);
 
   String _defaultWebSocketUrl() {
@@ -94,6 +105,35 @@ class _ClientHomePageState extends State<ClientHomePage> {
     final base = Uri.base;
     final scheme = base.scheme == 'https' ? 'wss' : 'ws';
     return Uri(scheme: scheme, host: base.host, port: 8080).toString();
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _queueInitialization = _initializeOfflineQueue();
+  }
+
+  Future<void> _initializeOfflineQueue() async {
+    try {
+      final preferences = await SharedPreferences.getInstance();
+      final queue = OfflineLocationQueue(preferences: preferences);
+      if (mounted) setState(() => _offlineQueue = queue);
+      final locations = await queue.read();
+      if (!mounted) return;
+      setState(() {
+        _offlineQueue = queue;
+        _queuedLocationCount = locations.length;
+        _queueError = null;
+      });
+      final client = _client;
+      if (client?.isConnected == true) {
+        unawaited(_flushLocationQueue(client!));
+      }
+    } catch (error) {
+      if (mounted) {
+        setState(() => _queueError = 'GPS queue unavailable: $error');
+      }
+    }
   }
 
   @override
@@ -148,6 +188,9 @@ class _ClientHomePageState extends State<ClientHomePage> {
           ClientConnectionState.reconnecting => 'Reconnecting...',
         };
       });
+      if (state == ClientConnectionState.connected) {
+        unawaited(_flushLocationQueue(client));
+      }
     });
     setState(() => _status = 'Connecting...');
     try {
@@ -243,7 +286,10 @@ class _ClientHomePageState extends State<ClientHomePage> {
 
   void _startMapPointSelection() {
     if (_client?.isConnected != true) return;
-    setState(() => _selectingMapPoint = true);
+    setState(() {
+      _measuringDistance = false;
+      _selectingMapPoint = true;
+    });
   }
 
   Future<void> _promptAndSendPoint(LatLng location) async {
@@ -289,9 +335,38 @@ class _ClientHomePageState extends State<ClientHomePage> {
   }
 
   Future<void> _handleMapTap(LatLng location) async {
-    if (!_selectingMapPoint) return;
-    setState(() => _selectingMapPoint = false);
-    await _promptAndSendPoint(location);
+    if (_selectingMapPoint) {
+      setState(() => _selectingMapPoint = false);
+      await _promptAndSendPoint(location);
+      return;
+    }
+    if (_measuringDistance) {
+      setState(() => _measurementPoints.add(location));
+    }
+  }
+
+  void _toggleDistanceMeasurement() {
+    setState(() {
+      _selectingMapPoint = false;
+      if (_measuringDistance) {
+        _measuringDistance = false;
+      } else {
+        _measurementPoints.clear();
+        _measuringDistance = true;
+      }
+    });
+  }
+
+  void _clearDistanceMeasurement() {
+    setState(() {
+      _measuringDistance = false;
+      _measurementPoints.clear();
+    });
+  }
+
+  String _formatDistance(double meters) {
+    if (meters < 1000) return '${meters.toStringAsFixed(0)} m';
+    return '${(meters / 1000).toStringAsFixed(2)} km';
   }
 
   void _sendSos() {
@@ -323,20 +398,19 @@ class _ClientHomePageState extends State<ClientHomePage> {
       setState(() => _status = 'Location permission or service unavailable');
       return;
     }
+    await _queueInitialization;
+    if (_offlineQueue == null) {
+      if (mounted) {
+        setState(() => _status = _queueError ?? 'GPS storage unavailable');
+      }
+      return;
+    }
     setState(() {
       _sharing = true;
       _status = 'Sharing GPS location';
     });
     _locationSubscription = _locationService.watch().listen(
       (position) {
-        if (client.isConnected) {
-          client.sendLocation(
-            latitude: position.latitude,
-            longitude: position.longitude,
-            deviceName: client.deviceName,
-            accuracy: position.accuracy,
-          );
-        }
         final location = TeamLocation(
           deviceId: client.deviceId,
           deviceName: client.deviceName,
@@ -353,11 +427,93 @@ class _ClientHomePageState extends State<ClientHomePage> {
           if (trail.length > 100) trail.removeAt(0);
         });
         _moveMap(location.latitude, location.longitude);
+        unawaited(_queueAndFlushLocation(position, client));
       },
       onError: (Object error) {
         if (mounted) setState(() => _status = 'GPS error: $error');
       },
     );
+  }
+
+  Future<void> _queueAndFlushLocation(
+    Position position,
+    TacticalClient client,
+  ) async {
+    final queue = _offlineQueue;
+    if (queue == null) {
+      if (mounted) {
+        setState(() => _queueError ??= 'Waiting for local GPS storage');
+      }
+      return;
+    }
+    final now = DateTime.now().microsecondsSinceEpoch;
+    final queued = QueuedLocation(
+      queueId: '$now-${_queueIdCounter++}',
+      latitude: position.latitude,
+      longitude: position.longitude,
+      deviceName: client.deviceName,
+      recordedAt: position.timestamp,
+      accuracy: position.accuracy,
+    );
+    try {
+      await queue.enqueue(queued);
+      if (mounted) {
+        final current = await queue.read();
+        setState(() {
+          _queuedLocationCount = current.length;
+          _queueError = null;
+        });
+      }
+      await _flushLocationQueue(client);
+    } catch (error) {
+      if (mounted) {
+        setState(() => _queueError = 'Could not store GPS location: $error');
+      }
+    }
+  }
+
+  Future<void> _flushLocationQueue(TacticalClient client) async {
+    final queue = _offlineQueue;
+    if (queue == null || _flushingLocations || !client.isConnected) return;
+    _flushingLocations = true;
+    String? syncError;
+    try {
+      while (mounted && identical(_client, client) && client.isConnected) {
+        final locations = await queue.read();
+        if (locations.isEmpty) break;
+        final location = locations.first;
+        try {
+          await client.sendLocationAcknowledged(
+            latitude: location.latitude,
+            longitude: location.longitude,
+            deviceName: location.deviceName,
+            recordedAt: location.recordedAt,
+            accuracy: location.accuracy,
+          );
+        } catch (error) {
+          syncError = error.toString();
+          break;
+        }
+        await queue.remove(location.queueId);
+      }
+      if (mounted) {
+        final remaining = await queue.read();
+        setState(() {
+          _queuedLocationCount = remaining.length;
+          _queueError = remaining.isEmpty
+              ? null
+              : syncError == null
+                  ? 'Waiting to sync GPS'
+                  : 'GPS sync paused: $syncError';
+        });
+      }
+    } catch (error) {
+      if (mounted) {
+        setState(() => _queueError = 'Could not sync queued GPS: $error');
+      }
+    } finally {
+      _flushingLocations = false;
+    }
   }
 
   Future<void> _stopSharing() async {
@@ -447,21 +603,28 @@ class _ClientHomePageState extends State<ClientHomePage> {
                   ],
                 ),
                 PolylineLayer(
-                  polylines: _trails.entries
-                      .where((entry) => entry.value.length > 1)
-                      .map(
-                        (entry) => Polyline(
-                          points: entry.value,
-                          strokeWidth:
-                              entry.key == _deviceController.text.trim()
-                                  ? 5
-                                  : 3,
-                          color: entry.key == _deviceController.text.trim()
-                              ? Colors.indigo
-                              : Colors.orange,
+                  polylines: [
+                    ..._trails.entries
+                        .where((entry) => entry.value.length > 1)
+                        .map(
+                          (entry) => Polyline(
+                            points: entry.value,
+                            strokeWidth:
+                                entry.key == _deviceController.text.trim()
+                                    ? 5
+                                    : 3,
+                            color: entry.key == _deviceController.text.trim()
+                                ? Colors.indigo
+                                : Colors.orange,
+                          ),
                         ),
-                      )
-                      .toList(),
+                    if (_measurementPoints.length > 1)
+                      Polyline(
+                        points: _measurementPoints,
+                        strokeWidth: 4,
+                        color: const Color(0xFF087F5B),
+                      ),
+                  ],
                 ),
                 MarkerLayer(
                   markers: [
@@ -501,6 +664,28 @@ class _ClientHomePageState extends State<ClientHomePage> {
                               child: const Icon(Icons.warning,
                                   color: Colors.red, size: 44),
                             )),
+                    ..._measurementPoints.asMap().entries.map((entry) => Marker(
+                          point: entry.value,
+                          width: 34,
+                          height: 34,
+                          child: Container(
+                            alignment: Alignment.center,
+                            decoration: const BoxDecoration(
+                              color: Color(0xFF087F5B),
+                              shape: BoxShape.circle,
+                              border: Border.fromBorderSide(
+                                BorderSide(color: Colors.white, width: 2),
+                              ),
+                            ),
+                            child: Text(
+                              '${entry.key + 1}',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        )),
                   ],
                 ),
               ],
@@ -549,40 +734,6 @@ class _ClientHomePageState extends State<ClientHomePage> {
                                 letterSpacing: 0.7,
                               ),
                             ),
-                            if (_selectingMapPoint)
-                              Positioned(
-                                left: 12,
-                                right: 12,
-                                top: 104,
-                                child: Card(
-                                  color: Theme.of(context).colorScheme.primary,
-                                  child: Padding(
-                                    padding:
-                                        const EdgeInsets.fromLTRB(14, 8, 6, 8),
-                                    child: Row(
-                                      children: [
-                                        const Icon(Icons.touch_app_rounded,
-                                            color: Colors.white),
-                                        const SizedBox(width: 10),
-                                        const Expanded(
-                                          child: Text(
-                                            'Tap the map to choose a team point',
-                                            style:
-                                                TextStyle(color: Colors.white),
-                                          ),
-                                        ),
-                                        IconButton(
-                                          tooltip: 'Cancel map selection',
-                                          onPressed: () => setState(
-                                              () => _selectingMapPoint = false),
-                                          icon: const Icon(Icons.close,
-                                              color: Colors.white),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ),
-                              ),
                           ],
                         ),
                       ),
@@ -603,6 +754,48 @@ class _ClientHomePageState extends State<ClientHomePage> {
                 ),
               ),
             ),
+            if (_selectingMapPoint || _measuringDistance)
+              Positioned(
+                left: 12,
+                right: 12,
+                top: 104,
+                child: Card(
+                  color: Theme.of(context).colorScheme.primary,
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(14, 8, 6, 8),
+                    child: Row(
+                      children: [
+                        Icon(
+                          _selectingMapPoint
+                              ? Icons.touch_app_rounded
+                              : Icons.straighten_rounded,
+                          color: Colors.white,
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            _selectingMapPoint
+                                ? 'Tap the map to choose a team point'
+                                : _measurementPoints.length < 2
+                                    ? 'Tap the map to add measurement points'
+                                    : '${_measurementPoints.length} points · '
+                                        '${_formatDistance(calculateRouteDistanceMeters(_measurementPoints))}',
+                            style: const TextStyle(color: Colors.white),
+                          ),
+                        ),
+                        IconButton(
+                          tooltip: 'Finish map action',
+                          onPressed: () => setState(() {
+                            _selectingMapPoint = false;
+                            _measuringDistance = false;
+                          }),
+                          icon: const Icon(Icons.check, color: Colors.white),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
             Positioned(
               left: 12,
               right: 12,
@@ -683,6 +876,31 @@ class _ClientHomePageState extends State<ClientHomePage> {
                             );
                           }).toList(),
                         ),
+                      if (_queuedLocationCount > 0 || _queueError != null) ...[
+                        const SizedBox(height: 6),
+                        Row(
+                          children: [
+                            Icon(
+                              _queueError == null
+                                  ? Icons.cloud_upload_outlined
+                                  : Icons.info_outline,
+                              size: 16,
+                              color: const Color(0xFF9A5B00),
+                            ),
+                            const SizedBox(width: 6),
+                            Expanded(
+                              child: Text(
+                                _queueError ??
+                                    '$_queuedLocationCount GPS updates waiting to sync',
+                                style: const TextStyle(
+                                  color: Color(0xFF805000),
+                                  fontSize: 12,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
                     ],
                   ),
                 ),
@@ -719,6 +937,32 @@ class _ClientHomePageState extends State<ClientHomePage> {
                         : null,
                     child: const Icon(Icons.add_location_alt_rounded),
                   ),
+                  const SizedBox(height: 8),
+                  FloatingActionButton.small(
+                    heroTag: 'measure-distance',
+                    tooltip: _measuringDistance
+                        ? 'Finish distance measurement'
+                        : 'Measure distance',
+                    backgroundColor: _measuringDistance
+                        ? Theme.of(context).colorScheme.primary
+                        : null,
+                    foregroundColor: _measuringDistance ? Colors.white : null,
+                    onPressed: _toggleDistanceMeasurement,
+                    child: Icon(
+                      _measuringDistance
+                          ? Icons.check_rounded
+                          : Icons.straighten_rounded,
+                    ),
+                  ),
+                  if (_measurementPoints.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    FloatingActionButton.small(
+                      heroTag: 'clear-measurement',
+                      tooltip: 'Clear distance measurement',
+                      onPressed: _clearDistanceMeasurement,
+                      child: const Icon(Icons.delete_outline_rounded),
+                    ),
+                  ],
                   const SizedBox(height: 8),
                   FloatingActionButton.small(
                     heroTag: 'sos',
