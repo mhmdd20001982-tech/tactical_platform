@@ -42,4 +42,23 @@ void main() {
     expect(find.text('Tap the map to add measurement points'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets('shows the Windows operations dashboard on wide screens',
+      (tester) async {
+    tester.view.physicalSize = const Size(1440, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(const TacticalPlatformApp());
+    await tester.pump(const Duration(milliseconds: 500));
+
+    expect(find.text('TEAM MEMBERS'), findsOneWidget);
+    expect(find.text('ACTIVE SOS'), findsOneWidget);
+    expect(find.text('TEAM POINTS'), findsOneWidget);
+    expect(find.text('CHAT MESSAGES'), findsOneWidget);
+    expect(find.text('Latest member locations'), findsOneWidget);
+    expect(find.text('Activity'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
 }
